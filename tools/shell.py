@@ -1,12 +1,12 @@
-"""受控 shell 执行（Day5：bash；Day10：加沙箱与权限）。"""
+"""受控 shell 执行（Day4：bash；Day8：加沙箱与权限）。"""
 from __future__ import annotations
 from .base import Tool
 
 
 def _bash(command: str, timeout: int = 30) -> str:
-    # TODO[Day5] subprocess 执行，捕获 stdout/stderr/returncode，超时保护
-    # TODO[Day10] 接入权限层 + 沙箱（bwrap/firejail/docker），危险命令需确认
-    raise NotImplementedError("Day5：实现 bash")
+    # TODO[Day4] subprocess 执行，捕获 stdout/stderr/returncode，超时保护
+    # TODO[Day6] 接入权限层 + 沙箱（bwrap/firejail/docker），危险命令需确认
+    raise NotImplementedError("Day4：实现 bash")
 
 
 bash_tool = Tool(
