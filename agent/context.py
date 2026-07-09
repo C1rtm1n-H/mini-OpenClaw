@@ -12,7 +12,7 @@ from typing import Any
 
 
 def estimate_tokens(messages: list[dict[str, Any]]) -> int:
-    # TODO[Day4] 粗估即可（字符数/4 或用 tokenizer 精确数）
+    # 粗估即可（字符数/4）。
     return sum(len(str(m.get("content", ""))) for m in messages) // 4
 
 
@@ -20,11 +20,43 @@ def maybe_compact(messages: list[dict[str, Any]], budget: int = 6000) -> list[di
     """超预算则压缩历史，返回新的 messages。"""
     if estimate_tokens(messages) <= budget:
         return messages
-    # TODO[Day4] 实现 compaction：
-    #   1) 保留 system（第0条）
-    #   2) 把中间较早的 user/assistant/tool 摘要成一条 system 备忘（可调后端做摘要）
-    #   3) 保留最近 K 轮原文
-    raise NotImplementedError("Day5：实现 compaction")
+    if len(messages) <= 6:
+        return messages
+
+    system = messages[0] if messages and messages[0].get("role") == "system" else None
+    body = messages[1:] if system else messages[:]
+
+    keep_recent = 8
+    if len(body) <= keep_recent:
+        return messages
+
+    old = body[:-keep_recent]
+    recent = body[-keep_recent:]
+    summary = _summarize_messages(old)
+    compact_msg = {
+        "role": "system",
+        "content": (
+            "[历史上下文压缩备忘]\n"
+            "以下是较早对话的压缩摘要，用于延续当前任务；最近消息仍保留原文。\n"
+            f"{summary}"
+        ),
+    }
+    return ([system] if system else []) + [compact_msg] + recent
+
+
+def _summarize_messages(messages: list[dict[str, Any]], max_items: int = 24) -> str:
+    lines: list[str] = []
+    for m in messages[-max_items:]:
+        role = m.get("role", "?")
+        name = m.get("name")
+        content = str(m.get("content", "")).replace("\n", " ").strip()
+        if len(content) > 220:
+            content = content[:220] + "..."
+        label = f"{role}({name})" if name else str(role)
+        lines.append(f"- {label}: {content}")
+    omitted = len(messages) - len(lines)
+    prefix = f"已省略更早的 {omitted} 条消息。\n" if omitted > 0 else ""
+    return prefix + "\n".join(lines)
 
 
 def truncate_observation(text: str, max_chars: int = 4000) -> str:

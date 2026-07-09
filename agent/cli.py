@@ -6,20 +6,45 @@
 """
 from __future__ import annotations
 import argparse
+import shlex
 import sys
 
-from tools.base import build_default_registry
+from tools.base import ToolRegistry, build_default_registry
 from agent.prompts import SYSTEM_PROMPT
 
 
-def selfcheck() -> int:
+def _start_mcp(reg: ToolRegistry, command: list[str]) -> object:
+    from mcp.client import MCPClient, register_mcp_tools
+
+    client = MCPClient(command)
+    client.start()
+    register_mcp_tools(reg, client)
+    return client
+
+
+def selfcheck(mcp_commands: list[str] | None = None) -> int:
     print("== mini-OpenClaw 自检 ==")
     ok = True
+    clients = []
     try:
         reg = build_default_registry()
-        print(f"[ok] 工具注册表加载成功，当前内置工具数：{len(reg)}（Day5 起会变多）")
+        print(f"[ok] 工具注册表加载成功，当前内置工具数：{len(reg)}")
+        print("[ok] 内置工具：" + ", ".join(reg.names()))
     except Exception as e:  # noqa
         print(f"[FAIL] 工具注册表：{e}"); ok = False
+        reg = None
+
+    if reg is not None and mcp_commands:
+        for raw in mcp_commands:
+            try:
+                client = _start_mcp(reg, shlex.split(raw))
+                clients.append(client)
+                print(f"[ok] MCP 已接入：{raw}")
+            except Exception as e:  # noqa
+                print(f"[FAIL] MCP {raw}：{e}"); ok = False
+        if mcp_commands:
+            print(f"[ok] 接入 MCP 后工具数：{len(reg)}")
+            print("[ok] 当前工具：" + ", ".join(reg.names()))
 
     try:
         from backend.fake_backend import FakeBackend
@@ -30,12 +55,17 @@ def selfcheck() -> int:
 
     try:
         from agent.loop import AgentLoop  # noqa
-        print("[ok] 主循环模块可导入（Day5 实现 run 逻辑）")
+        print("[ok] 主循环模块可导入")
     except Exception as e:  # noqa
         print(f"[FAIL] 主循环：{e}"); ok = False
 
+    for client in clients:
+        close = getattr(client, "close", None)
+        if close:
+            close()
+
     print("== 自检", "通过 ✅" if ok else "未通过 ❌", "==")
-    print("\n下一步：按 dayNN 的 lab-guide 填 # TODO 标记。")
+    print("\n下一步：运行工具 smoke test 和端到端任务。")
     return 0 if ok else 1
 
 
@@ -43,14 +73,27 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="mini-openclaw")
     p.add_argument("task", nargs="?", help="要让 agent 完成的任务（自然语言）")
     p.add_argument("--selfcheck", action="store_true", help="只做骨架自检")
+    p.add_argument("--mcp-command", action="append", default=[],
+                   help="额外接入一个 MCP stdio server 命令，例如：\"python -m mcp.calc_server\"")
     args = p.parse_args(argv)
 
     if args.selfcheck or not args.task:
-        return selfcheck()
+        return selfcheck(args.mcp_command)
 
     # 真正跑任务：优先用 DeepSeek API；没配 key 时回退到 FakeBackend（离线打通管道）
     from agent.loop import AgentLoop
     reg = build_default_registry()
+    clients = []
+
+    # DAY4 默认接入 echo MCP，保证 mcp__echo 可用于实验验证。
+    mcp_commands = [[sys.executable, "-m", "mcp.echo_server"]]
+    mcp_commands.extend(shlex.split(raw) for raw in args.mcp_command)
+    for command in mcp_commands:
+        try:
+            clients.append(_start_mcp(reg, command))
+        except Exception as e:  # noqa
+            print(f"[提示] MCP server 接入失败（{' '.join(command)}）：{e}")
+
     try:
         from backend.client import DeepSeekBackend
         backend = DeepSeekBackend()                       # 需要 DEEPSEEK_API_KEY
@@ -58,8 +101,15 @@ def main(argv: list[str] | None = None) -> int:
         from backend.fake_backend import FakeBackend
         print(f"[提示] 未启用真后端（{e}），回退 FakeBackend。配置 DEEPSEEK_API_KEY 后即用真模型。")
         backend = FakeBackend()
-    agent = AgentLoop(backend, reg, SYSTEM_PROMPT)
-    print(agent.run(args.task))
+
+    try:
+        agent = AgentLoop(backend, reg, SYSTEM_PROMPT)
+        print(agent.run(args.task))
+    finally:
+        for client in clients:
+            close = getattr(client, "close", None)
+            if close:
+                close()
     return 0
 
 
