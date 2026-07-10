@@ -67,8 +67,28 @@ class DeepSeekBackend:
                 out.append({"role": "assistant", "content": m.get("content") or None,
                             "tool_calls": self._to_openai_tool_calls(m["tool_calls"])})
             else:
-                out.append({"role": role, "content": m.get("content", "")})
+                out.append({"role": role, "content": self._to_openai_content(m.get("content", ""))})
         return out
+
+    @staticmethod
+    def _to_openai_content(content: Any) -> Any:
+        """Convert internal Anthropic-style image blocks for OpenAI-compatible APIs."""
+        if not isinstance(content, list):
+            return content
+        converted = []
+        for block in content:
+            if block.get("type") != "image":
+                converted.append(block)
+                continue
+            source = block.get("source", {})
+            if source.get("type") != "base64":
+                raise ValueError("仅支持 base64 图像内容块")
+            media_type = source.get("media_type", "image/png")
+            converted.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{source.get('data', '')}"},
+            })
+        return converted
 
     @staticmethod
     def _to_openai_tool_calls(calls: list[dict]) -> list[dict]:
@@ -91,3 +111,15 @@ class DeepSeekBackend:
                 args = {}
             tool_calls.append({"id": tc.get("id"), "name": fn.get("name"), "arguments": args})
         return {"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls}
+
+
+class VisionBackend(DeepSeekBackend):
+    """OpenAI-compatible vision backend configured independently from DeepSeek."""
+
+    def __init__(self, timeout: float = 60.0):
+        api_key = os.environ.get("VISION_API_KEY", "")
+        base_url = os.environ.get("VISION_BASE_URL", "")
+        model = os.environ.get("VISION_MODEL", "")
+        if not all((api_key, base_url, model)):
+            raise RuntimeError("图像输入需要 VISION_API_KEY、VISION_BASE_URL 和 VISION_MODEL")
+        super().__init__(api_key=api_key, base_url=base_url, model=model, timeout=timeout)

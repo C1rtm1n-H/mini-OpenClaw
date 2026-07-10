@@ -26,7 +26,7 @@ class AgentLoop:
         self.system_prompt = system_prompt
         self.max_turns = max_turns          # 防死循环：硬上限
 
-    def run(self, user_task: str) -> str:
+    def run(self, user_task: str | list[dict[str, Any]]) -> str:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": user_task},

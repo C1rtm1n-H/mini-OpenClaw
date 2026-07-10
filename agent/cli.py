@@ -11,6 +11,7 @@ import sys
 
 from tools.base import ToolRegistry, build_default_registry
 from agent.prompts import SYSTEM_PROMPT
+from skills.loader import load_skills, skills_catalog
 
 
 def _start_mcp(reg: ToolRegistry, command: list[str]) -> object:
@@ -75,6 +76,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--selfcheck", action="store_true", help="只做骨架自检")
     p.add_argument("--mcp-command", action="append", default=[],
                    help="额外接入一个 MCP stdio server 命令，例如：\"python -m mcp.calc_server\"")
+    p.add_argument("--image", action="append", default=[],
+                   help="随任务发送的图片路径；可重复指定")
     args = p.parse_args(argv)
 
     if args.selfcheck or not args.task:
@@ -95,16 +98,32 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[提示] MCP server 接入失败（{' '.join(command)}）：{e}")
 
     try:
-        from backend.client import DeepSeekBackend
-        backend = DeepSeekBackend()                       # 需要 DEEPSEEK_API_KEY
+        from backend.client import DeepSeekBackend, VisionBackend
+        backend = VisionBackend() if args.image else DeepSeekBackend()
     except Exception as e:  # noqa
+        if args.image:
+            for client in clients:
+                close = getattr(client, "close", None)
+                if close:
+                    close()
+            print(f"错误：{e}")
+            return 2
         from backend.fake_backend import FakeBackend
         print(f"[提示] 未启用真后端（{e}），回退 FakeBackend。配置 DEEPSEEK_API_KEY 后即用真模型。")
         backend = FakeBackend()
 
     try:
-        agent = AgentLoop(backend, reg, SYSTEM_PROMPT)
-        print(agent.run(args.task))
+        skills = load_skills()
+        skill_prompt = (
+            "\n\n可用 Skills：\n" + skills_catalog(skills) +
+            "\n任务匹配某个 Skill 时，先用 read 读取其 SKILL.md，再严格按正文流程执行。"
+        )
+        user_task = args.task
+        if args.image:
+            from backend.multimodal import user_content
+            user_task = user_content(args.task, args.image)
+        agent = AgentLoop(backend, reg, SYSTEM_PROMPT + skill_prompt)
+        print(agent.run(user_task))
     finally:
         for client in clients:
             close = getattr(client, "close", None)
