@@ -73,6 +73,41 @@ SAMPLE_RECORDS: list[dict[str, Any]] = [
         ],
         "final": "已运行 scripts/setup.sh，脚本执行完毕，依赖安装成功。",
     },
+    {
+        "task": "audit-experiment-code",
+        "steps": [
+            {"tool_calls": [{"name": "glob", "arguments": {"pattern": "*.py"}}],
+             "raw": '<tool_call>{"name":"glob","arguments":{"pattern":"*.py"}}</tool_call>',
+             "prompt_tokens": 420, "completion_tokens": 18},
+            {"tool_calls": [{"name": "grep", "arguments": {"pattern": "seed|random|deterministic", "path": "."}}],
+             "raw": '<tool_call>{"name":"grep","arguments":{"pattern":"seed|random|deterministic","path":"."}}</tool_call>',
+             "prompt_tokens": 1100, "completion_tokens": 25},
+            {"tool_calls": [{"name": "grep", "arguments": {"pattern": "/home/|/data/|/mnt/|C:\\\\\\\\", "path": "."}}],
+             "raw": '<tool_call>{"name":"grep","arguments":{"pattern":"/home/|/data/|/mnt/|C:\\\\\\\\","path":"."}}</tool_call>',
+             "prompt_tokens": 1600, "completion_tokens": 26},
+            {"tool_calls": [{"name": "read", "arguments": {"path": "requirements.txt"}}],
+             "raw": '<tool_call>{"name":"read","arguments":{"path":"requirements.txt"}}</tool_call>',
+             "prompt_tokens": 2100, "completion_tokens": 19},
+            {"tool_calls": [{"name": "write", "arguments": {"path": "experiment-audit.md"}}],
+             "raw": '<tool_call>{"name":"write","arguments":{"path":"experiment-audit.md"}}</tool_call>',
+             "prompt_tokens": 2600, "completion_tokens": 120},
+        ],
+        "final": (
+            "# 实验代码审计报告\n\n"
+            "## 可复现性检查\n"
+            "| 维度 | 判定 | 说明 |\n|------|------|------|\n"
+            "| 随机种子 | ⚠️ | agent/loop.py:34 未固定 torch 随机种子，建议在 train() 开头添加 torch.manual_seed(42) |\n"
+            "| 硬编码路径 | ❌ | tools/more_tools.py:98 使用 /home/author/data，应改为通过 --data-dir 参数传入 |\n"
+            "| 依赖声明 | ✅ | requirements.txt 包含全部依赖，版本已锁定 |\n"
+            "| 评估指标 | ✅ | eval/metrics.py:81-89 正确实现了 success_rate |\n\n"
+            "## 严重问题\n"
+            "- **tools/more_tools.py:98**：`/home/author/data` 是硬编码路径，其他机器无法复现。建议改为 `Path(args.data_dir) / 'dataset.csv'` 或通过环境变量 `DATA_DIR` 配置。\n"
+            "- **agent/loop.py:34**：缺少 torch.manual_seed() 调用，不同运行结果不可复现。\n\n"
+            "## 总结\n"
+            "- 可复现性评分：4/6 项通过\n"
+            "- 建议在复现前修复：硬编码路径（tools/more_tools.py:98）、随机种子（agent/loop.py:34）"
+        ),
+    },
 ]
 
 
