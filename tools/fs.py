@@ -3,10 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from .base import Tool
+from .security import wrap_external
 
 
 def _read(path: str, max_bytes: int = 100_000) -> str:
-    """读取文本文件，返回带行号的内容。"""
+    """读取文本文件，返回带行号的内容（外部数据边界标记，防止注入）。"""
     p = Path(path)
     try:
         if not p.exists():
@@ -38,7 +39,7 @@ def _read(path: str, max_bytes: int = 100_000) -> str:
 
     if truncated:
         body += f"\n...[已截断，读取前 {max_bytes} 字节，共 {p.stat().st_size} 字节]"
-    return body
+    return wrap_external(body, path)
 
 
 def _write(path: str, content: str) -> str:

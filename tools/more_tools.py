@@ -14,6 +14,7 @@ from markdownify import markdownify as md
 
 from agent.context import truncate_observation
 from .base import Tool
+from .security import wrap_external, host_allowed
 
 
 # --- edit：三种策略权衡（整文件重写 / unified diff / search-replace）---
@@ -108,10 +109,12 @@ def _glob(pattern: str) -> str:
 
 # --- web_fetch：URL -> markdown，控 token 预算 ---
 def _web_fetch(url: str, max_tokens: int = 2000) -> str:
-    """抓取 URL，HTML 转 markdown，并按预算截断。"""
+    """抓取 URL，HTML 转 markdown，按预算截断；仅放行白名单域名，返回外部数据边界标记。"""
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return "错误：web_fetch 仅支持 http/https URL。"
+    if not host_allowed(url):
+        return f"错误：目标域名不在出站白名单内，已阻断：{parsed.hostname}"
 
     try:
         resp = httpx.get(url, follow_redirects=True, timeout=15.0, headers={"User-Agent": "mini-OpenClaw/0.1"})
@@ -126,7 +129,8 @@ def _web_fetch(url: str, max_tokens: int = 2000) -> str:
 
     header = f"URL: {resp.url}\nStatus: {resp.status_code}\n\n"
     max_chars = max(1000, int(max_tokens) * 4)
-    return truncate_observation(header + text.strip(), max_chars)
+    content = truncate_observation(header + text.strip(), max_chars)
+    return wrap_external(content, url)
 
 
 # --- task_list（TodoWrite）：自维护待办，提升长任务成功率 ---
@@ -161,7 +165,7 @@ grep_tool = Tool("grep", "在文件内容中搜索匹配 pattern 的行（优先
 glob_tool = Tool("glob", "按通配模式递归查找文件路径，例如 '*.py'。适合先发现候选文件。",
                  {"type": "object", "properties": {"pattern": {"type": "string"}},
                   "required": ["pattern"]}, _glob)
-web_fetch_tool = Tool("web_fetch", "抓取 http/https URL 并转为 markdown（受 token 预算限制）。适合读取用户给出的网页链接。",
+web_fetch_tool = Tool("web_fetch", "抓取 http/https URL 并转为 markdown（受 token 预算限制），仅放行出站白名单域名。适合读取用户给出的网页链接。",
                       {"type": "object", "properties": {"url": {"type": "string"},
                        "max_tokens": {"type": "integer", "description": "返回内容预算，粗略 token 数，默认 2000"}},
                        "required": ["url"]}, _web_fetch)

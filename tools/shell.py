@@ -1,18 +1,38 @@
 """受控 shell 执行（Day4：bash；Day8：加沙箱与权限）。"""
 from __future__ import annotations
+import shutil
 import subprocess
 
 from .base import Tool
 
+# 命令黑名单不可枚举穷尽（讲义 §2）；仅作 bwrap 缺失时的兜底防线。
+_DENY = ("rm -rf /", "rm -rf ~", "rm -rf *", ":(){", "mkfs", "dd if=", "> /dev/sd", "curl", "wget")
+
+
+def is_denylisted(command: str) -> bool:
+    """纯字符串判定，不执行命令；供红队测试等场景探测黑名单命中面。"""
+    return any(bad in command for bad in _DENY)
+
+
+def _build_command(command: str) -> list[str]:
+    if shutil.which("bwrap"):
+        # 只读挂载系统根、可写仅工作目录、禁网：即使命令本身失控也限制破坏面。
+        return ["bwrap", "--ro-bind", "/", "/", "--bind", ".", ".",
+                "--unshare-net", "--dev", "/dev", "bash", "-c", command]
+    return ["bash", "-c", command]
+
 
 def _bash(command: str, timeout: int = 30) -> str:
-    """执行一条 shell 命令，返回 stdout/stderr/returncode。"""
+    """在沙箱中执行一条 shell 命令，返回 stdout/stderr/returncode。"""
+    if is_denylisted(command):
+        return f"[沙箱] 拒绝执行高危命令：{command}"
+
     try:
         proc = subprocess.run(
-            command,
-            shell=True,
+            _build_command(command),
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as e:
@@ -40,7 +60,7 @@ def _bash(command: str, timeout: int = 30) -> str:
 
 bash_tool = Tool(
     name="bash",
-    description="在工作目录中执行一条 shell 命令并返回 stdout、stderr 和退出码。适合运行测试、查看环境、执行项目命令。",
+    description="在沙箱中执行一条 shell 命令并返回 stdout、stderr 和退出码；有 bwrap 时只读挂载系统根、禁网、仅工作目录可写，否则退化为高危命令黑名单拦截。适合运行测试、查看环境、执行项目命令。",
     parameters={"type": "object",
                 "properties": {"command": {"type": "string"},
                                "timeout": {"type": "integer", "description": "超时时间（秒），默认 30"}},
