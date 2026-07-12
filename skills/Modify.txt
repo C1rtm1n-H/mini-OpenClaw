@@ -1,0 +1,135 @@
+科研辅助 Skill 库扩展记录
+
+一、本次新增的 Skill
+
+1. experiment-error-diagnosis
+   用于实验报错、异常栈、失败日志和报错截图的根因定位、最小修复与低成本验证。
+
+2. experiment-results-analysis
+   用于 CSV、JSON、Markdown 或日志形式的实验结果汇总，多配置、多随机种子、消融和稳定性分析。
+
+3. research-figure-analysis
+   用于论文图表、实验曲线、结果表格、终端报错和界面异常截图的证据化分析。
+
+4. experiment-reproduction-plan
+   用于把论文、README、仓库或审计报告转成分阶段、可验证、可回滚的实验复现计划。
+
+5. metric-implementation-review
+   用于核对文档声明与指标代码实现，检查聚合、阈值、评估模式、数据划分和分布式统计风险。
+
+6. dependency-environment-audit
+   用于审计 Python、系统库、CUDA/GPU、未声明 import、版本约束、私有包和跨平台环境问题。
+
+7. notebook-audit
+   用于检查 Jupyter Notebook 的隐藏状态、执行顺序、依赖、随机性、路径、安全和脚本化复现问题。
+
+8. baseline-comparison
+   用于比较多个 baseline 或审计报告的性能证据、复现难度、资源、数据、指标可信度和工程风险。
+
+二、本次未修改的现有 Skill
+
+以下 Skill 属于其他成员已有工作，本次仅记录问题，不修改正文：
+
+1. experiment-audit
+   功能：定位实验入口，检查 seed、数据划分、依赖、路径、指标和 GPU，执行轻量验证并生成报告。
+   存在问题：
+   - `python train.py --help` 和 `python -c "import train"` 可能执行顶层副作用，并非天然安全。
+   - 示例使用 `head -30`，在 Windows PowerShell 中不稳定。
+   - 缺少风险严重性、置信度、Confirmed/Suspected/Unverified 状态和固定问题 ID。
+   - “预估显存、数据大小、时间”没有证据时容易产生不可靠推断。
+   - `N/6` 评分过于简单，未体现问题严重性。
+
+2. paper-digest
+   功能：提取单篇论文的研究问题、贡献、方法、实验、结论和局限。
+   存在问题：
+   - PDF 流程依赖“环境中已有提取工具”，工程尚无正式 `pdf_extract` Tool。
+   - 缺少分页、扫描版/OCR、长文分段和提取失败降级流程。
+   - 论文网页输入需要明确使用 `web_fetch`，当前步骤主要写了 glob/read/bash。
+
+3. lit-review
+   功能：整理多篇文献并输出统一字段、共识、分歧和研究空白。
+   存在问题：
+   - 缺少文献去重、纳入/排除标准、DOI/题名核对和来源追踪。
+   - 缺少“某条综合结论由哪些论文支持”的证据映射。
+   - 缺少主题分类、时间线、文献质量分级和引用/BibTeX 导出流程。
+
+4. csv-quick-report（example-skill）
+   功能：统计 CSV 类型、缺失值、均值和分位数并生成 Markdown 报告。
+   存在问题：
+   - 仍带课程示例说明，不适合作为最终科研 Agent 的正式 Skill。
+   - 依赖 pandas，但 requirements.txt 未声明 pandas。
+   - 缺少多随机种子、mean ± std、消融、异常运行和实验可比性规则。
+   - 后续可由 experiment-results-analysis 替代，但本次不删除或修改。
+
+三、能力边界
+
+- Skill 只规定触发条件、工作流、证据标准和输出格式，不会自动增加底层解析或计算能力。
+- PDF、OCR、AST、Notebook 解析、统计检验和安全命令仍需要对应 Tool 支持。
+- 现有 Tool 不足时，Skill 必须标记未确认事项，不得虚构执行结果。
+- 所有新增 Skill 默认不安装依赖、不下载数据、不启动完整训练、不删除或覆盖用户文件。
+
+四、Skill 分类
+
+以下分类按主要职责划分。部分 Skill 可以跨阶段协同，但每个 Skill 只列在最主要的类别中，避免重复召回和职责混淆。
+
+1. 论文与文献理解
+
+   - paper-digest（现有）
+     面向单篇论文，提取研究问题、核心贡献、方法、实验、结论和局限。
+
+   - lit-review（现有）
+     面向多篇文献，建立统一字段对比表，归纳共识、分歧和研究空白。
+
+2. 实验运行前审计与规划
+
+   - experiment-audit（现有）
+     审计实验仓库的入口、参数、随机种子、数据划分、依赖、路径、指标和资源配置。
+
+   - dependency-environment-audit（新增）
+     专门审计 Python、系统库、CUDA/GPU、版本约束、未声明 import、私有包和跨平台环境风险。
+
+   - metric-implementation-review（新增）
+     专门核对论文或 README 声明的指标与代码实现，检查聚合、阈值、评估模式和数据使用风险。
+
+   - experiment-reproduction-plan（新增）
+     根据代码、论文、README 或审计报告制定分阶段、可验证、可回滚的实验复现计划。
+
+3. 实验运行后诊断与结果分析
+
+   - experiment-error-diagnosis（新增）
+     分析实验异常栈、失败日志和报错信息，定位首个根因并给出最小修复与验证方案。
+
+   - experiment-results-analysis（新增）
+     汇总 CSV、JSON 或日志中的多方法、多配置、多随机种子和消融实验结果，分析稳定性与可支持结论。
+
+4. 多模态与交互式科研材料
+
+   - research-figure-analysis（新增）
+     分析论文图表、实验曲线、结果表格、终端报错和界面异常截图，区分可见事实与推断。
+
+   - notebook-audit（新增）
+     审计 Jupyter Notebook 的执行顺序、隐藏状态、依赖、路径、随机性、输出和脚本化复现风险。
+
+5. 多方案决策与比较
+
+   - baseline-comparison（新增）
+     比较多个 baseline、代码仓库或审计报告的性能证据、复现难度、资源、数据可得性和工程风险。
+
+6. 通用数据分析示例
+
+   - csv-quick-report（现有 example-skill）
+     对单个 CSV 做类型、缺失值、均值和分位数概览。当前仍是课程示例，正式科研结果分析优先使用 experiment-results-analysis。
+
+7. 推荐的协同顺序
+
+   典型科研工作流可按以下顺序组合 Skill：
+
+   paper-digest / lit-review
+   → experiment-audit
+   → dependency-environment-audit / metric-implementation-review
+   → experiment-reproduction-plan
+   → experiment-error-diagnosis
+   → experiment-results-analysis / research-figure-analysis
+   → baseline-comparison
+
+   notebook-audit 可在发现项目以 `.ipynb` 为主要入口时插入运行前审计阶段。
