@@ -1,0 +1,15 @@
+{
+  "技术栈": "Python 3.11+，DeepSeek API（OpenAI 兼容），纯 CLI 无前端；依赖见 requirements.txt",
+  "包管理器": "pip（Python 项目），依赖写在 requirements.txt，禁止用 npm/pnpm/yarn",
+  "运行命令": "python -m agent.cli \"任务描述\"",
+  "自检命令": "python -m agent.cli --selfcheck",
+  "安装依赖": "pip install -r requirements.txt",
+  "环境变量": "DEEPSEEK_API_KEY（必需），DEEPSEEK_BASE_URL（默认 https://api.deepseek.com），DEEPSEEK_MODEL（默认 deepseek-chat）",
+  "注释规范": "中文注释 + 英文标识符；docstring 用中文说明意图，变量/函数名用 snake_case 英文",
+  "工具注册规则": "新工具需同时在 build_default_registry()（tools/base.py）和 SYSTEM_PROMPT（agent/prompts.py）中注册，缺一不可",
+  "权限分类规则": "新工具需加入 permissions.py 的对应分类（READONLY/WRITE/EXEC/META），否则默认拦截为 confirm",
+  "已知坑-编码": "Windows 终端 GBK 编码不兼容 emoji，print 时 UnicodeEncodeError；解决：用英文状态标记或设置 PYTHONIOENCODING=utf-8",
+  "已知坑-FakeBackend": "FakeBackend 是规则驱动的假后端，只匹配几个硬编码模式（记住/忘记/echo/TODO/add/文件/hello）；未配 DEEPSEEK_API_KEY 时不具备真实推理能力",
+  "已知坑-路径": "WSL 下路径前缀为 wsl.localhost，bash 工具在 Windows 宿主执行而非 WSL 内部，可用 pwd 确认实际工作目录",
+  "已知坑-import 缓存": "tools/__pycache__ 中的 .pyc 可能落后于源码，导入报错时先删 __pycache__ 重试"
+}

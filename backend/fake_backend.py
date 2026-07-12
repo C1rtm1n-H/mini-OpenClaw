@@ -38,6 +38,14 @@ class FakeBackend:
             return {"role": "assistant", "content": f"[FakeBackend] 已根据工具结果完成：{str(last)[:120]}", "tool_calls": []}
 
         task = str(user_task)
+        if ("记住" in task or "remember" in task.lower()) and "remember" in tool_names:
+            note = task.strip()
+            return {"role": "assistant", "content": "", "tool_calls": [{"id": "fake_remember", "name": "remember", "arguments": {"note": note}}]}
+
+        if ("忘记" in task or "遗忘" in task or "forget" in task.lower()) and "forget" in tool_names:
+            key = task.strip()
+            return {"role": "assistant", "content": "", "tool_calls": [{"id": "fake_forget", "name": "forget", "arguments": {"key": key}}]}
+
         if "echo" in task.lower() or "原样返回" in task:
             echo_tool = "mcp__echo" if "mcp__echo" in tool_names else ("echo" if "echo" in tool_names else None)
             if echo_tool:

@@ -3,12 +3,15 @@ from pathlib import Path
 READONLY = {"read", "grep", "glob"}
 WRITE    = {"write", "edit"}
 EXEC     = {"bash", "web_fetch"}
+META     = {"remember", "forget"}  # 只操作记忆文件，安全可控，无条件放行
 
 def check(tool: str, args: dict, workdir: Path) -> str:
     """返回 'allow' / 'confirm' / 'deny'。"""
     if tool in READONLY:
         # 越界读取一样要拦：注入诱导"读 ~/.ssh/id_rsa"这类请求不能靠工具本身兜底。
         return "deny" if _escapes_workdir(args.get("path", "."), workdir) else "allow"
+    if tool in META:
+        return "allow"            # remember 等元操作只写项目约定文件，安全可控
     if tool in WRITE:
         # 限制在工作目录内，越界直接拒绝
         return "deny" if _escapes_workdir(args.get("path", ""), workdir) else "confirm"

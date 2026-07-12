@@ -118,11 +118,19 @@ def main(argv: list[str] | None = None) -> int:
             "\n\n可用 Skills：\n" + skills_catalog(skills) +
             "\n任务匹配某个 Skill 时，先用 read 读取其 SKILL.md，再严格按正文流程执行。"
         )
+
+        # 召回记忆并注入 system prompt
+        from agent.memory import recall_all
+        recalled = recall_all()
+        system = SYSTEM_PROMPT + skill_prompt
+        if recalled.strip():
+            system += "\n\n# 关于本项目 / 用户的已知记忆（相关时遵循）\n" + recalled
+
         user_task = args.task
         if args.image:
             from backend.multimodal import user_content
             user_task = user_content(args.task, args.image)
-        agent = AgentLoop(backend, reg, SYSTEM_PROMPT + skill_prompt)
+        agent = AgentLoop(backend, reg, system)
         print(agent.run(user_task))
     finally:
         for client in clients:

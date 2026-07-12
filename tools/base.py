@@ -63,6 +63,7 @@ def build_default_registry() -> ToolRegistry:
     from .fs import read_tool, write_tool
     from .shell import bash_tool
     from .more_tools import edit_tool, grep_tool, glob_tool, web_fetch_tool
+    from .remember import remember_tool, forget_tool
 
     for tool in (
         read_tool,
@@ -72,6 +73,8 @@ def build_default_registry() -> ToolRegistry:
         grep_tool,
         glob_tool,
         web_fetch_tool,
+        remember_tool,
+        forget_tool,
     ):
         reg.register(tool)
     return reg
