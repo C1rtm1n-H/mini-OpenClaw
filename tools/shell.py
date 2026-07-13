@@ -2,16 +2,32 @@
 from __future__ import annotations
 import shutil
 import subprocess
+import re
 
 from .base import Tool
 
 # 命令黑名单不可枚举穷尽（讲义 §2）；仅作 bwrap 缺失时的兜底防线。
-_DENY = ("rm -rf /", "rm -rf ~", "rm -rf *", ":(){", "mkfs", "dd if=", "> /dev/sd", "curl", "wget")
+_DENY = (":(){", "mkfs", "dd if=", "> /dev/sd", "curl", "wget")
+_DANGEROUS_RE = re.compile(
+    r"(?:"
+    r"\brm\s+-[^\n]*r[^\n]*f|"
+    r"\bRemove-Item\b[^\n]*(?:-Recurse|-Force)|"
+    r"\b(?:rmdir|rd)\s+/s\b|"
+    r"\bshutil\.rmtree\b|"
+    r"\b(?:python(?:3)?\s+[^\n]*(?:train|finetune|fine_tune)\.py\b)|"
+    r"\b(?:torchrun|deepspeed)\b|"
+    r"\baccelerate\s+launch\b|"
+    r"\b(?:bash|sh)\s+[^\n]*(?:train|finetune)[^\n]*\.sh\b|"
+    r"\b(?:pip|conda|mamba)\s+install\b|"
+    r"\bgit\s+clone\b"
+    r")",
+    re.I,
+)
 
 
 def is_denylisted(command: str) -> bool:
     """纯字符串判定，不执行命令；供红队测试等场景探测黑名单命中面。"""
-    return any(bad in command for bad in _DENY)
+    return any(bad in command for bad in _DENY) or bool(_DANGEROUS_RE.search(command))
 
 
 def _build_command(command: str) -> list[str]:
@@ -25,7 +41,7 @@ def _build_command(command: str) -> list[str]:
 def _bash(command: str, timeout: int = 30) -> str:
     """在沙箱中执行一条 shell 命令，返回 stdout/stderr/returncode。"""
     if is_denylisted(command):
-        return f"[沙箱] 拒绝执行高危命令：{command}"
+        return f"[沙箱] 拒绝执行破坏性、训练、下载或安装命令：{command}"
 
     try:
         proc = subprocess.run(
@@ -60,7 +76,7 @@ def _bash(command: str, timeout: int = 30) -> str:
 
 bash_tool = Tool(
     name="bash",
-    description="在沙箱中执行一条 shell 命令并返回 stdout、stderr 和退出码；有 bwrap 时只读挂载系统根、禁网、仅工作目录可写，否则退化为高危命令黑名单拦截。适合运行测试、查看环境、执行项目命令。",
+    description="执行受控的短时 shell 命令；拒绝递归删除、完整训练、数据/代码下载和依赖安装。审计任务不使用此工具。",
     parameters={"type": "object",
                 "properties": {"command": {"type": "string"},
                                "timeout": {"type": "integer", "description": "超时时间（秒），默认 30"}},

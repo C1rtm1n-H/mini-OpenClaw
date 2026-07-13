@@ -51,6 +51,20 @@ python -m agent.cli --selfcheck
 python -m agent.cli
 ```
 
+## 科研实验代码只读审计
+
+```bash
+python -m agent.cli --audit "审一下这个仓库能不能复现，别真跑训练：<repo路径>"
+```
+
+`--audit` 是独立的 `AUDIT_READONLY` 模式：只向模型提供 `read`、`glob`、`grep`、`audit_scan`，
+不注册写入、编辑、Shell、网络、MCP 或记忆工具。审计报告直接输出到终端，不修改被审仓库。
+
+审计固定核对训练/评估入口、README 命令与代码参数、硬编码路径、随机种子、数据划分、
+依赖、资源和指标实现，并静态标出 `rm -rf outputs`、下载、安装、覆盖等危险副作用。
+它不会运行 `train.py --help`、`import train`、训练、推理、数据处理或下载命令；用户要求完整
+复现时会降级为静态审计、轻量验证建议和分阶段复现计划。
+
 ## 里程碑
 
 - **v1（Day6）**：`python -m agent.cli "创建 hello.py 并运行输出当前时间"` 能完成。

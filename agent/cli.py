@@ -7,11 +7,13 @@
 """
 from __future__ import annotations
 import argparse
+import re
 import shlex
 import sys
+from pathlib import Path
 
 from tools.base import ToolRegistry, build_default_registry
-from agent.prompts import SYSTEM_PROMPT
+from agent.prompts import AUDIT_SYSTEM_PROMPT, SYSTEM_PROMPT
 from skills.loader import load_skills, skills_catalog
 
 
@@ -22,6 +24,24 @@ def _start_mcp(reg: ToolRegistry, command: list[str]) -> object:
     client.start()
     register_mcp_tools(reg, client)
     return client
+
+
+def _audit_root_from_task(task: str) -> Path:
+    """从自然语言任务提取现有仓库路径；未提供时审计当前目录。"""
+    candidates: list[str] = []
+    candidates.extend(re.findall(r'["“”\']([^"“”\']+)["“”\']', task))
+    candidates.extend(re.findall(r"[A-Za-z]:\\[^\n\"“”<>]+", task))
+    candidates.extend(re.findall(r"(?<![\w.])/(?:[^\s\"“”<>]+)", task))
+    if "：" in task:
+        candidates.append(task.rsplit("：", 1)[1])
+    for marker in ("仓库", "repo", "路径"):
+        if marker in task:
+            candidates.append(task.rsplit(marker, 1)[1].lstrip("：: "))
+    for raw in candidates:
+        path = Path(raw.strip().rstrip("。；;,，")).expanduser()
+        if path.is_dir():
+            return path.resolve()
+    return Path.cwd().resolve()
 
 
 def selfcheck(mcp_commands: list[str] | None = None) -> int:
@@ -79,17 +99,23 @@ def _build_agent(args: argparse.Namespace):
     """
     from agent.loop import AgentLoop
 
-    reg = build_default_registry()
+    audit_mode = args.audit is not None
     clients = []
-
-    # DAY4 默认接入 echo MCP，保证 mcp__echo 可用于实验验证。
-    mcp_commands = [[sys.executable, "-m", "mcp.echo_server"]]
-    mcp_commands.extend(shlex.split(raw) for raw in args.mcp_command)
-    for command in mcp_commands:
-        try:
-            clients.append(_start_mcp(reg, command))
-        except Exception as e:  # noqa
-            print(f"[提示] MCP server 接入失败（{' '.join(command)}）：{e}")
+    if audit_mode:
+        from tools.audit import build_audit_registry
+        audit_root = _audit_root_from_task(args.audit)
+        reg = build_audit_registry(audit_root)
+    else:
+        audit_root = Path.cwd().resolve()
+        reg = build_default_registry()
+        # 普通模式保留 MCP；AUDIT_READONLY 模式不启动任何外部 server。
+        mcp_commands = [[sys.executable, "-m", "mcp.echo_server"]]
+        mcp_commands.extend(shlex.split(raw) for raw in args.mcp_command)
+        for command in mcp_commands:
+            try:
+                clients.append(_start_mcp(reg, command))
+            except Exception as e:  # noqa
+                print(f"[提示] MCP server 接入失败（{' '.join(command)}）：{e}")
 
     try:
         from backend.client import DeepSeekBackend, VisionBackend
@@ -106,19 +132,29 @@ def _build_agent(args: argparse.Namespace):
         backend = FakeBackend()
 
     skills = load_skills()
-    skill_prompt = (
-        "\n\n可用 Skills：\n" + skills_catalog(skills) +
-        "\n任务匹配某个 Skill 时，先用 read 读取其 SKILL.md，再严格按正文流程执行。"
+    if audit_mode:
+        selected = [s for s in skills if s.name in {"experiment-audit", "metric-implementation-review"}]
+        procedures = "\n\n".join(f"# {s.name}\n{s.body}" for s in selected)
+        system = (
+            AUDIT_SYSTEM_PROMPT
+            + f"\n\n被审仓库根目录：{audit_root}\n工具路径一律相对此目录。"
+            + ("\n\n审计流程参考：\n" + procedures if procedures else "")
+        )
+    else:
+        skill_prompt = (
+            "\n\n可用 Skills：\n" + skills_catalog(skills) +
+            "\n任务匹配某个 Skill 时，先用 read 读取其 SKILL.md，再严格按正文流程执行。"
+        )
+        from agent.memory import recall_all
+        recalled = recall_all()
+        system = SYSTEM_PROMPT + skill_prompt
+        if recalled.strip():
+            system += "\n\n# 关于本项目 / 用户的已知记忆（相关时遵循）\n" + recalled
+
+    agent = AgentLoop(
+        backend, reg, system, workdir=audit_root,
+        max_turns=30 if audit_mode else 20,
     )
-
-    # 召回记忆并注入 system prompt
-    from agent.memory import recall_all
-    recalled = recall_all()
-    system = SYSTEM_PROMPT + skill_prompt
-    if recalled.strip():
-        system += "\n\n# 关于本项目 / 用户的已知记忆（相关时遵循）\n" + recalled
-
-    agent = AgentLoop(backend, reg, system)
     return agent, clients
 
 
@@ -130,10 +166,19 @@ def main(argv: list[str] | None = None) -> int:
                    help="额外接入一个 MCP stdio server 命令，例如：\"python -m mcp.calc_server\"")
     p.add_argument("--image", action="append", default=[],
                    help="随任务发送的图片路径；可重复指定")
+    p.add_argument("--audit", metavar="TASK",
+                   help="AUDIT_READONLY 只读审计模式；参数即审计任务，可在末尾给出仓库路径")
     args = p.parse_args(argv)
 
     if args.selfcheck:
         return selfcheck(args.mcp_command)
+
+    if args.audit is not None:
+        if args.task:
+            p.error("--audit 已包含任务文本，不能再提供位置参数 task")
+        if args.image:
+            p.error("--audit 严格只读模式不接受 --image")
+        args.task = args.audit
 
     if not args.task:
         try:

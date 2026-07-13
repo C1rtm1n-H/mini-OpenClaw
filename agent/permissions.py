@@ -1,6 +1,6 @@
 from pathlib import Path
 
-READONLY = {"read", "grep", "glob"}
+READONLY = {"read", "grep", "glob", "audit_scan"}
 WRITE    = {"write", "edit"}
 EXEC     = {"bash", "web_fetch"}
 META     = {"remember", "forget"}  # 只操作记忆文件，安全可控，无条件放行
