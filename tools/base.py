@@ -65,6 +65,7 @@ def build_default_registry() -> ToolRegistry:
     from .more_tools import edit_tool, grep_tool, glob_tool, web_fetch_tool
     from .pdf import pdf_extract_tool
     from .remember import remember_tool, forget_tool
+    from .todo_tools import todo_write_tool, update_todo_tool
 
     for tool in (
         read_tool,
@@ -77,6 +78,8 @@ def build_default_registry() -> ToolRegistry:
         pdf_extract_tool,
         remember_tool,
         forget_tool,
+        todo_write_tool,
+        update_todo_tool,
     ):
         reg.register(tool)
     return reg
