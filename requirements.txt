@@ -10,5 +10,8 @@ Pillow>=10.0         # 多模态图像缩放与编码
 # --- Day8 MCP（可选，最小客户端可不依赖官方 SDK）---
 # mcp>=1.0           # 官方 SDK，做对照时再装
 
+# --- Day10 交互式 REPL ---
+rich>=13.0           # 终端渲染：多轮对话界面、工具调用事件展示
+
 # 说明：本课程大脑走 DeepSeek API，不本地部署模型、不做 LoRA，故无需 vllm/peft/torch 等重依赖。
 # （Day2 的 nanoGPT 实验请用单独的 conda 环境安装 torch，避免污染 agent 环境。）

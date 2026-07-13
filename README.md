@@ -46,6 +46,9 @@ pip install -r requirements.txt
 python -m agent.cli --selfcheck
 
 # 3. 之后每天填对应模块，重跑相关入口
+
+# 4. Day10：无参数进入交互式多轮对话（Claude Code 式 REPL）
+python -m agent.cli
 ```
 
 ## 里程碑

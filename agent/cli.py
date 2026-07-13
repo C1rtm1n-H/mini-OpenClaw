@@ -3,6 +3,7 @@
 用法：
   python -m agent.cli --selfcheck          # Day1：自检骨架是否装好
   python -m agent.cli "创建 hello.py 并运行"  # Day5 起：真正跑任务（v1 在 Day6）
+  python -m agent.cli                      # 无参数进入交互式多轮对话
 """
 from __future__ import annotations
 import argparse
@@ -65,26 +66,19 @@ def selfcheck(mcp_commands: list[str] | None = None) -> int:
         if close:
             close()
 
-    print("== 自检", "通过 ✅" if ok else "未通过 ❌", "==")
+    print("== 自检", "通过" if ok else "未通过", "==")
     print("\n下一步：运行工具 smoke test 和端到端任务。")
     return 0 if ok else 1
 
 
-def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="mini-openclaw")
-    p.add_argument("task", nargs="?", help="要让 agent 完成的任务（自然语言）")
-    p.add_argument("--selfcheck", action="store_true", help="只做骨架自检")
-    p.add_argument("--mcp-command", action="append", default=[],
-                   help="额外接入一个 MCP stdio server 命令，例如：\"python -m mcp.calc_server\"")
-    p.add_argument("--image", action="append", default=[],
-                   help="随任务发送的图片路径；可重复指定")
-    args = p.parse_args(argv)
+def _build_agent(args: argparse.Namespace):
+    """组装一次任务/一次会话都要用的 AgentLoop：选后端、接 MCP、加 Skills。
 
-    if args.selfcheck or not args.task:
-        return selfcheck(args.mcp_command)
-
-    # 真正跑任务：优先用 DeepSeek API；没配 key 时回退到 FakeBackend（离线打通管道）
+    一次性任务模式和 REPL 模式共用这段逻辑，避免两处各写一遍容易跑偏。
+    返回 (AgentLoop 实例, mcp clients 列表)；调用方负责在结束时关闭 clients。
+    """
     from agent.loop import AgentLoop
+
     reg = build_default_registry()
     clients = []
 
@@ -106,31 +100,69 @@ def main(argv: list[str] | None = None) -> int:
                 close = getattr(client, "close", None)
                 if close:
                     close()
-            print(f"错误：{e}")
-            return 2
+            raise
         from backend.fake_backend import FakeBackend
         print(f"[提示] 未启用真后端（{e}），回退 FakeBackend。配置 DEEPSEEK_API_KEY 后即用真模型。")
         backend = FakeBackend()
 
+    skills = load_skills()
+    skill_prompt = (
+        "\n\n可用 Skills：\n" + skills_catalog(skills) +
+        "\n任务匹配某个 Skill 时，先用 read 读取其 SKILL.md，再严格按正文流程执行。"
+    )
+
+    # 召回记忆并注入 system prompt
+    from agent.memory import recall_all
+    recalled = recall_all()
+    system = SYSTEM_PROMPT + skill_prompt
+    if recalled.strip():
+        system += "\n\n# 关于本项目 / 用户的已知记忆（相关时遵循）\n" + recalled
+
+    agent = AgentLoop(backend, reg, system)
+    return agent, clients
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(prog="mini-openclaw")
+    p.add_argument("task", nargs="?", help="要让 agent 完成的任务（自然语言）；不给则进入交互模式")
+    p.add_argument("--selfcheck", action="store_true", help="只做骨架自检")
+    p.add_argument("--mcp-command", action="append", default=[],
+                   help="额外接入一个 MCP stdio server 命令，例如：\"python -m mcp.calc_server\"")
+    p.add_argument("--image", action="append", default=[],
+                   help="随任务发送的图片路径；可重复指定")
+    args = p.parse_args(argv)
+
+    if args.selfcheck:
+        return selfcheck(args.mcp_command)
+
+    if not args.task:
+        try:
+            agent, clients = _build_agent(args)
+        except Exception as e:  # noqa
+            print(f"错误：{e}")
+            return 2
+        try:
+            from agent.repl import run_repl
+            run_repl(agent)
+        finally:
+            for client in clients:
+                close = getattr(client, "close", None)
+                if close:
+                    close()
+        return 0
+
+    # 一次性任务：优先用 DeepSeek API；没配 key 时回退到 FakeBackend（离线打通管道）
     try:
-        skills = load_skills()
-        skill_prompt = (
-            "\n\n可用 Skills：\n" + skills_catalog(skills) +
-            "\n任务匹配某个 Skill 时，先用 read 读取其 SKILL.md，再严格按正文流程执行。"
-        )
+        agent, clients = _build_agent(args)
+    except Exception as e:  # noqa
+        print(f"错误：{e}")
+        return 2
 
-        # 召回记忆并注入 system prompt
-        from agent.memory import recall_all
-        recalled = recall_all()
-        system = SYSTEM_PROMPT + skill_prompt
-        if recalled.strip():
-            system += "\n\n# 关于本项目 / 用户的已知记忆（相关时遵循）\n" + recalled
-
+    try:
         user_task = args.task
         if args.image:
             from backend.multimodal import user_content
             user_task = user_content(args.task, args.image)
-        agent = AgentLoop(backend, reg, system)
         print(agent.run(user_task))
     finally:
         for client in clients:
