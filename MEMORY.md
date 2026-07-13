@@ -1,5 +1,5 @@
-- 项目架构：ReAct 循环（agent/loop.py）→ 后端（backend/）→ 模型生成 tool_call → 工具执行 → observation 回注 → 循环直到最终答复
-- 代码组织：tools/ 内置工具（fs/shell/more_tools/remember），mcp/ 外部 MCP 客户端，skills/ 领域技能，eval/ 评估，security/ 安全层
-- 安全层（Day 6/Day 10）：权限分层（permissions.py）+ 路径越界拦截 + 外部内容边界标记（tools/security.py wrap_external）+ 出站白名单（ALLOW_HOSTS）
-- 记忆系统（Day 10）：MEMORY.md 纯文本追加 + memory.json KV 覆盖更新；会话启动时 recall_all() 合并注入 system prompt；remember/forget 工具让模型自行管理
-- 工具调用格式：模型输出带有 name/arguments 的 tool_call JSON，主循环解析并分发执行
+- 项目架构：ReAct 循环（agent/loop.py）→ 后端（backend/）→ 模型生成 tool_call → 工具执行 → observation 回注 → 循环直到最终答复 <!-- memory:id=482299358a56;created=1783924293.450441;updated=1783924293.450441;expires= -->
+- 代码组织：tools/ 内置工具（fs/shell/more_tools/remember），mcp/ 外部 MCP 客户端，skills/ 领域技能，eval/ 评估，security/ 安全层 <!-- memory:id=a324577c8010;created=1783924293.450441;updated=1783924293.450441;expires= -->
+- 安全层（Day 6/Day 10）：权限分层（permissions.py）+ 路径越界拦截 + 外部内容边界标记（tools/security.py wrap_external）+ 出站白名单（ALLOW_HOSTS） <!-- memory:id=3aa72dadebd0;created=1783924293.450441;updated=1783924293.450441;expires= -->
+- 记忆系统（Day 10）：MEMORY.md 纯文本追加 + memory.json KV 覆盖更新；会话启动时 recall_all() 合并注入 system prompt；remember/forget 工具让模型自行管理 <!-- memory:id=6a7aebe455c4;created=1783924293.450441;updated=1783924293.450441;expires= -->
+- 工具调用格式：模型输出带有 name/arguments 的 tool_call JSON，主循环解析并分发执行 <!-- memory:id=83d89c11e68f;created=1783924293.450441;updated=1783924293.450441;expires= -->
