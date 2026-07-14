@@ -13,6 +13,21 @@ def check(tool: str, args: dict, workdir: Path) -> str:
         return "deny" if _escapes_workdir(args.get("path", "."), workdir) else "allow"
     if tool in META:
         return "allow"            # remember 等元操作只写项目约定文件，安全可控
+    if tool == "pdf_extract":
+        source = args.get("path", "")
+        output = args.get("output_path", "")
+        if _escapes_workdir(source, workdir) or (output and _escapes_workdir(output, workdir)):
+            return "deny"
+        # 已有缓存且未请求覆盖时，pdf_extract 只检查并复用，不发生写入。
+        source_path = Path(source)
+        if not source_path.is_absolute():
+            source_path = workdir / source_path
+        target = Path(output) if output else source_path.with_suffix(".txt")
+        if output and not target.is_absolute():
+            target = workdir / target
+        if target.exists() and not args.get("overwrite", False):
+            return "allow"
+        return "confirm"
     if tool in WRITE:
         # 限制在工作目录内，越界直接拒绝
         return "deny" if _escapes_workdir(args.get("path", ""), workdir) else "confirm"

@@ -30,7 +30,22 @@ def _pdf_extract(
     if source.resolve() == target.resolve():
         return "错误：输出路径不能与 PDF 路径相同。"
     if target.exists() and not overwrite:
-        return f"错误：输出文件已存在：{target}；如需覆盖请设置 overwrite=true。"
+        try:
+            source_mtime = source.stat().st_mtime_ns
+            target_mtime = target.stat().st_mtime_ns
+        except OSError as exc:
+            return f"错误：无法检查 PDF 文本缓存状态：{exc}"
+
+        if target_mtime >= source_mtime:
+            return (
+                f"已复用现有 PDF 文本缓存：{target}（{target.stat().st_size} 字节）；"
+                "未重复转换。后续请直接用 read 或 grep 分段分析该文本。"
+            )
+        return (
+            f"PDF 文本缓存已过期：源文件 {source} 比 {target} 更新；"
+            "为避免覆盖可能经过人工编辑的文本，本次未转换。"
+            "确认需要刷新后请设置 overwrite=true。"
+        )
 
     try:
         from PyPDF2 import PdfReader
@@ -87,8 +102,9 @@ def _pdf_extract(
 pdf_extract_tool = Tool(
     name="pdf_extract",
     description=(
-        "把 PDF 的指定页码范围提取为 UTF-8 .txt 文件。适合论文速读前处理；"
-        "返回输出路径和页数，不把整篇长文本直接放入上下文。"
+        "幂等地把 PDF 的指定页码范围提取为 UTF-8 .txt 文件。默认输出存在且不旧时"
+        "直接复用，不重复转换；输出比 PDF 旧时提示缓存过期且不自动覆盖。"
+        "仅在用户明确要求刷新过期缓存时设置 overwrite=true。"
     ),
     parameters={
         "type": "object",
@@ -108,7 +124,7 @@ pdf_extract_tool = Tool(
             },
             "overwrite": {
                 "type": "boolean",
-                "description": "是否覆盖已有输出文件，默认 false",
+                "description": "是否强制覆盖已有输出，默认 false；仅用于明确刷新过期缓存",
             },
         },
         "required": ["path"],
