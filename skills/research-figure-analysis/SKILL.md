@@ -1,6 +1,7 @@
 ---
 name: research-figure-analysis
 description: 当用户提供论文图表、实验曲线、结果表格、终端报错或界面异常截图，需要识别可见内容、解释趋势或联合代码定位问题时使用。
+enabled: true
 ---
 
 # 科研图表与截图分析

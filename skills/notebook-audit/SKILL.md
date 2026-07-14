@@ -1,6 +1,7 @@
 ---
 name: notebook-audit
 description: 当用户需要审计 Jupyter Notebook 的隐藏状态、执行顺序、依赖、路径、随机性、输出、数据泄漏或脚本化复现风险时使用。
+enabled: true
 ---
 
 # Notebook 审计

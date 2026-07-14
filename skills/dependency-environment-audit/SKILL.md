@@ -1,6 +1,7 @@
 ---
 name: dependency-environment-audit
 description: 当用户需要审计科研项目的 Python、CUDA、GPU、系统依赖、未声明 import、版本约束、私有包或跨平台环境风险时使用。
+enabled: true
 ---
 
 # 依赖与环境审计

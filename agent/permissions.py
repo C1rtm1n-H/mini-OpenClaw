@@ -3,8 +3,8 @@ from pathlib import Path
 READONLY = {"read", "grep", "glob"}
 WRITE    = {"write", "edit"}
 EXEC     = {"bash", "web_fetch"}
-META     = {"remember", "forget", "todo_write", "update_todo"}
-# META 只操作项目记忆或进程内待办状态，不执行外部命令，也不改用户代码。
+META     = {"remember", "forget", "todo_write", "update_todo", "invoke_skill"}
+# META 只操作项目记忆、进程内待办或 skill 加载，不执行外部命令，也不改用户代码。
 
 def check(tool: str, args: dict, workdir: Path) -> str:
     """返回 'allow' / 'confirm' / 'deny'。"""

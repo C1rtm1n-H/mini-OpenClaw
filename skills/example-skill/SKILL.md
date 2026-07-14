@@ -1,6 +1,7 @@
 ---
 name: csv-quick-report
 description: 当用户给一个 CSV 文件并想要快速统计概览/出一份 markdown 报告时使用。
+enabled: true
 ---
 
 # CSV 快速报告 Skill（示例）

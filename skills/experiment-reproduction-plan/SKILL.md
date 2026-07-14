@@ -1,6 +1,7 @@
 ---
 name: experiment-reproduction-plan
 description: 当用户需要根据论文、README、代码审计报告或实验仓库制定分阶段、可验证、可回滚的科研实验复现计划时使用。
+enabled: true
 ---
 
 # 实验复现计划

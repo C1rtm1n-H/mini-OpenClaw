@@ -1,6 +1,7 @@
 ---
 name: metric-implementation-review
 description: 当用户需要核对论文或 README 声明的评价指标与代码实现是否一致，检查聚合、阈值、数据划分、评估模式或分布式统计风险时使用。
+enabled: true
 ---
 
 # 指标实现审查

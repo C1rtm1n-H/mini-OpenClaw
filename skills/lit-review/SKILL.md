@@ -1,6 +1,7 @@
 ---
 name: lit-review
 description: 当用户需要整理、对比多篇文献时使用，输出统一字段的对比表以及共识、分歧、研究空白的归纳。
+enabled: true
 ---
 
 # 文献整理

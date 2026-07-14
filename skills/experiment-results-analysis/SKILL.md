@@ -1,6 +1,7 @@
 ---
 name: experiment-results-analysis
 description: 当用户提供 CSV、JSON、Markdown 或日志形式的科研实验结果，需要汇总多方法、多配置、多随机种子、消融实验或稳定性结论时使用。
+enabled: true
 ---
 
 # 实验结果分析

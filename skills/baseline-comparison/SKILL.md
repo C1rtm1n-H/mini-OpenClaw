@@ -1,6 +1,7 @@
 ---
 name: baseline-comparison
 description: 当用户需要比较多个科研 baseline、代码仓库或审计报告，从复现难度、指标可信度、资源需求、数据可得性和风险选择实现方案时使用。
+enabled: true
 ---
 
 # Baseline 比较

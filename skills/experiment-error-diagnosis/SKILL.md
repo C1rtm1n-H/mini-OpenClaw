@@ -1,6 +1,7 @@
 ---
 name: experiment-error-diagnosis
 description: 当用户提供科研实验报错、异常栈、失败命令、运行日志或报错截图，需要定位根因、提出最小修复并设计低成本验证时使用。
+enabled: true
 ---
 
 # 实验错误诊断

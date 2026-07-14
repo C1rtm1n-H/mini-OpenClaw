@@ -1,6 +1,7 @@
 ---
 name: paper-digest
 description: 当用户需要速读单篇科研论文（PDF/文本/网页）时使用，输出研究问题、核心贡献、方法、数据与实验、主要结论、局限性的结构化速读报告。
+enabled: true
 ---
 
 # 论文速读

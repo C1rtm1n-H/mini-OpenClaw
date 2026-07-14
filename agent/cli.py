@@ -108,7 +108,8 @@ def _build_agent(args: argparse.Namespace):
     skills = load_skills()
     skill_prompt = (
         "\n\n可用 Skills：\n" + skills_catalog(skills) +
-        "\n任务匹配某个 Skill 时，先用 read 读取其 SKILL.md，再严格按正文流程执行。"
+        "\n任务匹配某个 Skill 时，调用 invoke_skill(name=\"xxx\") 加载其完整操作流程，"
+        "再严格按正文执行。不要手动 read SKILL.md 文件。"
     )
 
     # 召回记忆并注入 system prompt
