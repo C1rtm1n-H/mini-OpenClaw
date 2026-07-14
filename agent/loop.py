@@ -208,6 +208,11 @@ class AgentLoop:
         """追加一轮用户输入，跑 ReAct 直到给出最终答复；self.messages 跨调用累积，支持多轮对话。"""
         self.messages.append({"role": "user", "content": user_input})
 
+        # 如果上一轮任务已全部完成，清空遗留的 TODO，避免 stop_reason()
+        # 在新一轮对话的第一轮迭代就误判为"任务完成"。
+        if TODO.items and TODO.all_done():
+            TODO.items.clear()
+
         step_count = 0  # Day 8：步数计数器
 
         for turn in range(self.max_turns):
