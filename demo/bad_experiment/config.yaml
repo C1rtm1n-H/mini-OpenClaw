@@ -1,0 +1,16 @@
+# 实验配置 —— 缺陷：硬编码绝对路径（D13）
+data:
+  train_path: /home/user/data/MiniImageNet/train/
+  test_path: /home/user/data/MiniImageNet/test/
+
+checkpoint:
+  save_dir: /mnt/gpu_server/checkpoints/
+  # D14: resume 路径也是绝对路径
+  resume_from: /mnt/gpu_server/checkpoints/model_epoch50.pt
+
+# D15: 训练超参数写死在配置中，但 train.py 并未读取此文件
+training:
+  epochs: 100
+  batch_size: 32
+  learning_rate: 0.001
+  device: cuda:0

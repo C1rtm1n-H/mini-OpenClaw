@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import re
 
 READONLY = {"read", "grep", "glob"}
@@ -7,21 +8,45 @@ EXEC     = {"bash", "web_fetch"}
 META     = {"remember", "forget", "todo_write", "update_todo", "invoke_skill"}
 # META 只操作项目记忆、进程内待办或 skill 加载，不执行外部命令，也不改用户代码。
 
+# 安全数据根：允许 agent 访问工作目录以外的用户数据目录（如 Docker 部署的 /data）
+# 可通过 OPENCLAW_DATA_ROOTS 环境变量扩展，冒号分隔
+_SAFE_ROOTS: tuple[Path, ...] = tuple(
+    Path(p).resolve()
+    for p in os.environ.get("OPENCLAW_DATA_ROOTS", "/data").split(":")
+    if p.strip()
+)
+
+
+def _in_safe_root(path: str, workdir: Path) -> bool:
+    """路径是否落在某个安全数据根内（非系统目录，用户显式指定的数据区）。"""
+    if not path:
+        return False
+    target = _resolve_path(path, workdir)
+    for root in _SAFE_ROOTS:
+        try:
+            target.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def check(tool: str, args: dict, workdir: Path,
           task_scopes: tuple[Path, ...] = (),
           readonly_downgrade: bool = False) -> str:
     """返回 'allow' / 'confirm' / 'deny'。"""
     if tool in READONLY:
-        # 越界读取一样要拦：注入诱导"读 ~/.ssh/id_rsa"这类请求不能靠工具本身兜底。
         path = args.get("path", ".")
         if (
             _escapes_workdir(path, workdir)
             and not (task_scopes and _within_task_scope(path, workdir, task_scopes))
+            and not _in_safe_root(path, workdir)
         ):
             return "deny"
         if task_scopes and not _within_task_scope(path, workdir, task_scopes):
-            # 模型可读取某个明确的 Skill 流程，但不能借此扫描宿主工程。
             if tool == "read" and _is_skill_instruction(path, workdir):
+                return "allow"
+            if _in_safe_root(path, workdir):
                 return "allow"
             return "deny"
         return "allow"
@@ -32,17 +57,18 @@ def check(tool: str, args: dict, workdir: Path,
         output = args.get("output_path", "")
         source_allowed = not _escapes_workdir(source, workdir) or (
             task_scopes and _within_task_scope(source, workdir, task_scopes)
-        )
+        ) or _in_safe_root(source, workdir)
         output_allowed = not output or not _escapes_workdir(output, workdir) or (
             task_scopes and _within_task_scope(output, workdir, task_scopes)
-        )
+        ) or _in_safe_root(output, workdir)
         if not source_allowed or not output_allowed:
             return "deny"
         if task_scopes and (
             not _within_task_scope(source, workdir, task_scopes)
             or (output and not _within_task_scope(output, workdir, task_scopes))
         ):
-            return "deny"
+            if not _in_safe_root(source, workdir) and not (output and _in_safe_root(output, workdir)):
+                return "deny"
         # 已有缓存且未请求覆盖时，pdf_extract 只检查并复用，不发生写入。
         source_path = Path(source)
         if not source_path.is_absolute():
@@ -54,17 +80,18 @@ def check(tool: str, args: dict, workdir: Path,
             return "allow"
         return "confirm"
     if tool in WRITE:
-        # 限制在工作目录内，越界直接拒绝
         path = args.get("path", "")
         if (
             _escapes_workdir(path, workdir)
             and not (task_scopes and _within_task_scope(path, workdir, task_scopes))
+            and not _in_safe_root(path, workdir)
         ):
             return "deny"
         if (
             task_scopes
             and not _within_task_scope(path, workdir, task_scopes)
             and not _is_safe_report_output(path, workdir)
+            and not _in_safe_root(path, workdir)
         ):
             return "deny"
         return "confirm"
@@ -172,5 +199,7 @@ def _is_safe_diagnostic_command(command: str) -> bool:
         or bool(re.search(r"\b(?:python|py)(?:\.exe)?\s+--version\b", normalized))
         or bool(re.search(r"\bpip\s+(?:list|show|freeze)\b", normalized))
         or bool(re.search(r"\bpython\s+-m\s+(?:py_compile|compileall)\b", normalized))
-        or bool(re.search(r"\bpython\s+-c\s+[\"']import\s+[a-z_][\w.]*[\"']", normalized))
+        or bool(re.search(r"\bpython\s+-c\s+[\"'][\s\\n]*import\s+[a-z_][\w.]*", normalized))
+        or bool(re.search(r"\bast\s*\.\s*parse\b", normalized))
+        or bool(re.search(r"\bpy_compile\b", normalized))
     )

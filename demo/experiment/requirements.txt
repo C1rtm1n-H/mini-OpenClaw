@@ -1,0 +1,6 @@
+# 实验依赖 —— 添加版本约束以确保可复现
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+Pillow>=10.0.0
+scikit-learn>=1.3.0    # train.py 和 evaluate.py 均使用 sklearn

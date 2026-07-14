@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Python 虚拟环境
+.env
+.venv/
+venv/
+
+# 本地开发产物（不打包进镜像）
+demo/
+security/
+session/
+*.pdf
+*.pyc

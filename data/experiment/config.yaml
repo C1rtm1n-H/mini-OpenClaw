@@ -1,0 +1,18 @@
+# 实验配置 —— 参考配置（train.py 通过 argparse 参数读取，不直接解析此文件）
+# 使用方式：python train.py --epochs 100 --batch-size 32 --lr 0.001 --seed 42
+#           --data-dir ./data/ --checkpoint-dir ./checkpoints/
+
+data:
+  train_path: ./data/train/       # 相对路径，可被 --data-dir 覆盖
+  test_path: ./data/test/         # 相对路径，可被 --data-dir 覆盖
+
+checkpoint:
+  save_dir: ./checkpoints/        # 相对路径，可被 --checkpoint-dir 覆盖
+  resume_from: ./checkpoints/model_epoch50.pt  # 相对路径
+
+training:
+  epochs: 100
+  batch_size: 32
+  learning_rate: 0.001
+  seed: 42                        # 随机种子，确保可复现
+  device: auto                    # auto 表示自动检测（CUDA/MPS/CPU）
