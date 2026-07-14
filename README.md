@@ -49,6 +49,10 @@ python -m agent.cli --selfcheck
 
 # 4. Day10：无参数进入交互式多轮对话（Claude Code 式 REPL）
 python -m agent.cli
+
+# 长论文等复杂任务：提高模型调用轮数和规划步数
+# max-steps 必须大于等于 max-turns
+python -m agent.cli --max-turns 100 --max-steps 160
 ```
 
 ## 里程碑

@@ -18,7 +18,11 @@ _HELP = """可用命令：
   /clear  清空对话历史（重新开始）
   /tools  列出当前可用工具
   /exit、/quit  退出
-其它输入都会作为任务发给 agent。"""
+其它输入都会作为任务发给 agent。
+
+长论文等复杂任务可在启动时自定义预算：
+  python -m agent.cli --max-turns 100 --max-steps 160
+其中 max-turns 是模型调用轮数，max-steps 是规划步数，且 max-steps 不能小于 max-turns。"""
 
 _MAX_PREVIEW = 200
 
@@ -61,6 +65,10 @@ def run_repl(agent: AgentLoop) -> None:
     agent.confirm_hook = ui.confirm
 
     console.print("[bold green]mini-OpenClaw[/] 交互模式（/exit 退出，/help 查看帮助）")
+    console.print(
+        "[dim]长任务可自定义轮次：python -m agent.cli "
+        "--max-turns 100 --max-steps 160[/]"
+    )
 
     while True:
         try:

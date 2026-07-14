@@ -8,12 +8,38 @@
   - tool result 过长时先截断/摘要再注入。
 """
 from __future__ import annotations
+import json
 from typing import Any
 
 
 def estimate_tokens(messages: list[dict[str, Any]]) -> int:
-    # 粗估即可（字符数/4）。
-    return sum(len(str(m.get("content", ""))) for m in messages) // 4
+    # 把 tool_calls/arguments 也计入；只统计 content 会低估工具密集型任务。
+    serialized = json.dumps(messages, ensure_ascii=False, default=str)
+    return len(serialized) // 4
+
+
+def _safe_recent_start(body: list[dict[str, Any]], proposed: int) -> int:
+    """把窗口切点移到合法消息边界，绝不拆散 tool-call 事务。
+
+    OpenAI 协议要求每条 role=tool 消息都紧跟在声明对应 tool_calls 的
+    assistant 消息之后。滑动窗口如果从 tool 消息开始，就会得到 HTTP 400。
+    """
+    start = max(0, min(proposed, len(body)))
+    if start >= len(body) or body[start].get("role") != "tool":
+        return start
+
+    # 向前越过同一轮的所有 tool results，并保留发起调用的 assistant。
+    first_tool = start
+    while start > 0 and body[start].get("role") == "tool":
+        start -= 1
+    if body[start].get("role") == "assistant" and body[start].get("tool_calls"):
+        return start
+
+    # 历史本身若已不完整，至少不要把孤立 tool 消息发给后端。
+    start = first_tool
+    while start < len(body) and body[start].get("role") == "tool":
+        start += 1
+    return start
 
 
 def maybe_compact(messages: list[dict[str, Any]], budget: int = 6000) -> list[dict[str, Any]]:
@@ -30,8 +56,9 @@ def maybe_compact(messages: list[dict[str, Any]], budget: int = 6000) -> list[di
     if len(body) <= keep_recent:
         return messages
 
-    old = body[:-keep_recent]
-    recent = body[-keep_recent:]
+    recent_start = _safe_recent_start(body, len(body) - keep_recent)
+    old = body[:recent_start]
+    recent = body[recent_start:]
     summary = _summarize_messages(old)
     compact_msg = {
         "role": "system",

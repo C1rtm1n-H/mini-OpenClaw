@@ -118,19 +118,36 @@ def _build_agent(args: argparse.Namespace):
     if recalled.strip():
         system += "\n\n# 关于本项目 / 用户的已知记忆（相关时遵循）\n" + recalled
 
-    agent = AgentLoop(backend, reg, system)
+    agent = AgentLoop(
+        backend,
+        reg,
+        system,
+        max_turns=args.max_turns,
+        max_steps=args.max_steps,
+    )
     return agent, clients
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="mini-openclaw")
+    p = argparse.ArgumentParser(
+        prog="mini-openclaw",
+        description=("命令行科研智能体；长论文等复杂任务可通过 "
+                     "--max-turns 和 --max-steps 自定义执行预算。"),
+    )
     p.add_argument("task", nargs="?", help="要让 agent 完成的任务（自然语言）；不给则进入交互模式")
     p.add_argument("--selfcheck", action="store_true", help="只做骨架自检")
     p.add_argument("--mcp-command", action="append", default=[],
                    help="额外接入一个 MCP stdio server 命令，例如：\"python -m mcp.calc_server\"")
     p.add_argument("--image", action="append", default=[],
                    help="随任务发送的图片路径；可重复指定")
+    p.add_argument("--max-turns", type=int, default=60,
+                   help="单次任务最多调用模型的轮数（默认 60）")
+    p.add_argument("--max-steps", type=int, default=100,
+                   help="单次任务的规划步数上限（默认 100，不能小于 max-turns）")
     args = p.parse_args(argv)
+
+    if args.max_turns < 1 or args.max_steps < args.max_turns:
+        p.error("--max-turns 必须大于 0，且 --max-steps 不能小于 --max-turns")
 
     if args.selfcheck:
         return selfcheck(args.mcp_command)

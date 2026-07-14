@@ -33,6 +33,32 @@ class DeepSeekBackend:
             raise RuntimeError("缺少 DEEPSEEK_API_KEY 环境变量")
         self._client = httpx.Client(timeout=timeout)
 
+    @property
+    def chat_completions_url(self) -> str:
+        """兼容传入站点根地址和 OpenAI SDK 风格的 ``.../v1`` 地址。"""
+        if self.base_url.endswith("/v1"):
+            return f"{self.base_url}/chat/completions"
+        return f"{self.base_url}/v1/chat/completions"
+
+    @staticmethod
+    def _raise_for_status(resp: httpx.Response) -> None:
+        """抛出包含服务端错误正文的异常，避免只看到笼统的 HTTP 400。"""
+        if not resp.is_error:
+            return
+
+        # Aihubmix/OpenAI 兼容服务通常会在 JSON 正文中给出真正原因，
+        # 例如模型不存在、模型不支持 tools，或 key 没有访问权限。
+        try:
+            detail = json.dumps(resp.json(), ensure_ascii=False)
+        except (ValueError, json.JSONDecodeError):
+            detail = resp.text.strip()
+        if not detail:
+            detail = resp.reason_phrase or "无响应正文"
+        detail = detail[:4000]
+        raise RuntimeError(
+            f"后端 HTTP {resp.status_code}（{resp.request.url}）：{detail}"
+        )
+
     def chat(self, messages: list[dict[str, Any]], tools: list[dict] | None = None,
              temperature: float = 0.0) -> dict[str, Any]:
         """一次（非流式）对话补全，返回归一化的 assistant 消息。"""
@@ -46,11 +72,11 @@ class DeepSeekBackend:
             payload["tool_choice"] = "auto"
 
         resp = self._client.post(
-            f"{self.base_url}/v1/chat/completions",
+            self.chat_completions_url,
             headers={"Authorization": f"Bearer {self.api_key}"},
             json=payload,
         )
-        resp.raise_for_status()
+        self._raise_for_status(resp)
         msg = resp.json()["choices"][0]["message"]
         return self._normalize(msg)
 
