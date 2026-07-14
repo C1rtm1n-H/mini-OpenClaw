@@ -22,6 +22,7 @@ Day 9 新增（可观测性）：
 from __future__ import annotations
 from pathlib import Path
 import re
+import time
 from typing import Any, Callable
 
 from agent.context import maybe_compact, truncate_observation
@@ -32,6 +33,32 @@ from agent.planning import (
 )
 from agent.tracer import Tracer
 from tools.base import ToolRegistry
+
+
+def _is_transient_backend_error(error: Exception) -> bool:
+    """判断后端错误是否值得重试，避免对 400/鉴权/代码错误重复烧请求。"""
+    if isinstance(error, (TimeoutError, ConnectionError, OSError)):
+        return True
+
+    class_name = type(error).__name__.lower()
+    if any(marker in class_name for marker in (
+        "timeout", "connecterror", "networkerror", "protocolerror",
+        "readerror", "writeerror", "transporterror",
+    )):
+        return True
+
+    message = str(error).lower()
+    status_match = re.search(r"(?:http\s*)?(\d{3})", message)
+    if status_match:
+        status = int(status_match.group(1))
+        return status == 408 or status == 429 or 500 <= status <= 599
+
+    transient_markers = (
+        "timed out", "timeout", "connection reset", "connection refused",
+        "temporarily unavailable", "remote host", "server disconnected",
+        "远程主机", "连接", "网络",
+    )
+    return any(marker in message for marker in transient_markers)
 
 
 def dispatch_tool_call(name: str, arguments: dict[str, Any], registry: ToolRegistry,
@@ -116,6 +143,34 @@ class AgentLoop:
     def _emit(self, event: dict[str, Any]) -> None:
         if self.on_event is not None:
             self.on_event(event)
+
+    def _chat_with_retry(self, messages: list[dict[str, Any]], max_tries: int = 3) -> dict[str, Any]:
+        """调用模型；只对网络、超时、429 和 5xx 做有限指数退避重试。"""
+        last_error: Exception | None = None
+        for attempt in range(1, max_tries + 1):
+            try:
+                return self.tracer.span(
+                    "llm", "decide",
+                    lambda: self.backend.chat(messages, tools=self.registry.schemas()),
+                    attempt=attempt,
+                )
+            except Exception as error:  # noqa: BLE001
+                last_error = error
+                transient = _is_transient_backend_error(error)
+                if not transient:
+                    raise RuntimeError(f"后端永久错误，不重试：{error}") from error
+                if attempt >= max_tries:
+                    break
+                delay = 0.5 * (2 ** (attempt - 1))
+                self._emit({
+                    "type": "assistant_text",
+                    "content": f"[后端恢复] 第 {attempt} 次调用失败，{delay:.1f}s 后重试：{error}",
+                })
+                time.sleep(delay)
+        raise RuntimeError(
+            f"后端瞬时错误重试 {max_tries} 次后仍失败：{last_error}。"
+            "本轮已安全结束；网络恢复后可在交互模式直接重试原指令。"
+        ) from last_error
 
     def _detect_task_scopes(self, user_input: str | list[dict[str, Any]]) -> tuple[Path, ...]:
         """从用户输入提取明确存在的 Windows 绝对路径作为授权根。"""
@@ -318,12 +373,9 @@ class AgentLoop:
             self.messages = maybe_compact(self.messages)
             ctx_messages = maybe_compact(ctx_messages)
 
-            # --- 调用后端（Day 9：用 Tracer 包裹）---
+            # --- 调用后端（瞬时故障有限重试；每次尝试均写入 trace）---
             try:
-                assistant = self.tracer.span(
-                    "llm", "decide",
-                    lambda: self.backend.chat(ctx_messages, tools=self.registry.schemas()),
-                )
+                assistant = self._chat_with_retry(ctx_messages)
                 # 从后端返回提取 usage，记入 LLM span
                 usage = assistant.get("usage", {})
                 if usage:
