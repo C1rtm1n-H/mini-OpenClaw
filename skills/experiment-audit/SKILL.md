@@ -8,6 +8,8 @@ enabled: true
 
 在不真正运行完整实验的前提下，审查实验代码的可复现性、正确性和完整性。四个阶段：定位 → 分析 → 诊断 → 建议。
 
+本 Skill 仅适用于用户明确提供了代码仓库的任务。若输入只有论文 PDF 而没有代码仓库，不执行第 1-3 阶段的代码或环境检查，改用 paper-digest / experiment-reproduction-plan，并把代码环境标为“不适用”。
+
 ### 1. 定位：发现关键文件
 
 1. 用 `glob` 扫描 `*.py`、`*.yaml`、`*.json`、`*.sh`、`requirements*.txt`、`environment*.yml`，列出项目文件结构。

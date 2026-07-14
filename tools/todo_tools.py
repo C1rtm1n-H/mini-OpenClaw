@@ -13,20 +13,29 @@ from .base import Tool
 # todo_write：把大目标分解为有序子任务
 # ---------------------------------------------------------------------------
 
-def _todo_write(items: list[str]) -> str:
-    """一次性写下分解后的清单；覆盖旧清单（新任务重置）。"""
+def _todo_write(items: list[str], replace: bool = False) -> str:
+    """创建单层主清单；仅显式故障重规划时允许替换。"""
     if not items:
         return "错误：items 不能为空；请提供至少一个子任务。"
+    if TODO.items and not replace:
+        return (
+            "[规划层] 当前任务已经有主清单，拒绝创建嵌套/子清单，也未修改原清单。"
+            "请直接执行当前项，并用 update_todo 更新原主清单；"
+            "只有当前方案确实不可行、需要整体重规划时才可设置 replace=true。\n"
+            "当前主清单：\n" + TODO.render()
+        )
     TODO.write(items)
-    return "任务清单已创建：\n" + TODO.render()
+    action = "已重建" if replace else "已创建"
+    return f"任务主清单{action}：\n" + TODO.render()
 
 
 todo_write_tool = Tool(
     name="todo_write",
     description=(
-        "面对多步任务时，先把它分解成有序子任务清单。传入子任务文本数组。"
+        "每个用户任务最多创建一次单层主清单。仅在当前没有清单时调用；"
+        "处理主清单中的某一项时禁止再次调用、禁止创建子清单，直接执行并 update_todo。"
         "每个子任务应具体、可验证、有明确终点（如「读取 config.py」而非「处理配置」）。"
-        "调用后清单会常驻上下文，每完成一步请用 update_todo 标记进度。"
+        "只有当前方案确实不可行、需要整体重规划时才设置 replace=true。"
     ),
     parameters={
         "type": "object",
@@ -35,7 +44,11 @@ todo_write_tool = Tool(
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "有序子任务文本列表，例如 ['读取 main.py', '修改数据库连接', '运行测试']",
-            }
+            },
+            "replace": {
+                "type": "boolean",
+                "description": "是否整体替换现有主清单，默认 false；仅用于故障后的整体重规划",
+            },
         },
         "required": ["items"],
     },

@@ -1,5 +1,6 @@
 """受控 shell 执行（Day4：bash；Day8：加沙箱与权限）。"""
 from __future__ import annotations
+import os
 import shutil
 import subprocess
 
@@ -15,6 +16,11 @@ def is_denylisted(command: str) -> bool:
 
 
 def _build_command(command: str) -> list[str]:
+    if os.name == "nt":
+        # 继承启动 mini-OpenClaw 的 PowerShell/Conda PATH，避免误入 WSL bash
+        # 后找不到当前环境中的 python、py 等 Windows 可执行文件。
+        shell = shutil.which("powershell.exe") or shutil.which("powershell") or "powershell.exe"
+        return [shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
     if shutil.which("bwrap"):
         # 只读挂载系统根、可写仅工作目录、禁网：即使命令本身失控也限制破坏面。
         return ["bwrap", "--ro-bind", "/", "/", "--bind", ".", ".",
@@ -60,7 +66,7 @@ def _bash(command: str, timeout: int = 30) -> str:
 
 bash_tool = Tool(
     name="bash",
-    description="在沙箱中执行一条 shell 命令并返回 stdout、stderr 和退出码；有 bwrap 时只读挂载系统根、禁网、仅工作目录可写，否则退化为高危命令黑名单拦截。适合运行测试、查看环境、执行项目命令。",
+    description="执行一条受控 shell 命令并返回 stdout、stderr 和退出码；Windows 使用 PowerShell 并继承当前 Python/Conda 环境，其他平台使用 bash。适合毫秒级验证，不执行训练或下载。",
     parameters={"type": "object",
                 "properties": {"command": {"type": "string"},
                                "timeout": {"type": "integer", "description": "超时时间（秒），默认 30"}},

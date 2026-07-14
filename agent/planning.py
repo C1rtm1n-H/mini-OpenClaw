@@ -228,9 +228,11 @@ def verify_passed() -> bool:
 
 
 def stop_reason(max_steps: int, current_step: int) -> str | None:
-    """超过步数上限或全部完成时返回终止原因，否则返回 None。"""
+    """超过步数上限时返回终止原因，否则返回 None。
+
+    TODO 全部完成不能在这里直接终止：模型还需要看到最后一条工具结果并生成
+    面向用户的总结。真正的正常终止由 assistant 不再发起工具调用来决定。
+    """
     if current_step >= max_steps:
         return f"已达步数上限（{max_steps} 步），当前进度：\n{TODO.render()}"
-    if TODO.all_done() and verify_passed():
-        return "任务完成。"
     return None

@@ -93,10 +93,15 @@ def _grep_python(pattern: str, path: str = ".") -> str:
 
 
 # --- glob：按文件名模式找文件 ---
-def _glob(pattern: str) -> str:
-    """用 pathlib.Path().rglob 找文件路径。"""
+def _glob(pattern: str, path: str = ".") -> str:
+    """在指定根目录内用 pathlib.Path.rglob 查找文件路径。"""
     try:
-        paths = sorted(str(p) for p in Path(".").rglob(pattern) if p.is_file())
+        root = Path(path)
+        if not root.exists():
+            return f"错误：glob 根目录不存在：{path}"
+        if not root.is_dir():
+            return f"错误：glob path 必须是目录：{path}"
+        paths = sorted(str(p) for p in root.rglob(pattern) if p.is_file())
     except Exception as e:  # noqa: BLE001
         return f"错误：glob 失败：{e}"
     if not paths:
@@ -162,8 +167,9 @@ edit_tool = Tool("edit", "编辑文件：把 old 文本替换为 new；仅当 ol
 grep_tool = Tool("grep", "在文件内容中搜索匹配 pattern 的行（优先使用 ripgrep），返回 文件:行号:内容。适合先定位再 read。",
                  {"type": "object", "properties": {"pattern": {"type": "string"},
                   "path": {"type": "string"}}, "required": ["pattern"]}, _grep)
-glob_tool = Tool("glob", "按通配模式递归查找文件路径，例如 '*.py'。适合先发现候选文件。",
-                 {"type": "object", "properties": {"pattern": {"type": "string"}},
+glob_tool = Tool("glob", "在指定 path 根目录内按通配模式递归查找文件，例如 pattern='*.py'。处理用户指定目标时必须把 path 限定到目标目录，不能默认扫描整个工作区。",
+                 {"type": "object", "properties": {"pattern": {"type": "string"},
+                  "path": {"type": "string", "description": "搜索根目录，默认当前工作目录"}},
                   "required": ["pattern"]}, _glob)
 web_fetch_tool = Tool("web_fetch", "抓取 http/https URL 并转为 markdown（受 token 预算限制），仅放行出站白名单域名。适合读取用户给出的网页链接。",
                       {"type": "object", "properties": {"url": {"type": "string"},

@@ -17,6 +17,7 @@ Day 8 新增（规划层）：
 """
 from __future__ import annotations
 from pathlib import Path
+import re
 from typing import Any, Callable
 
 from agent.context import maybe_compact, truncate_observation
@@ -31,6 +32,8 @@ from tools.base import ToolRegistry
 def dispatch_tool_call(name: str, arguments: dict[str, Any], registry: ToolRegistry,
                        workdir: Path, auto_approve: bool,
                        confirm_hook: Callable[[str, dict[str, Any]], bool] | None = None,
+                       task_scopes: tuple[Path, ...] = (),
+                       readonly_downgrade: bool = False,
                        ) -> str:
     """权限判定 + 执行单次工具调用，返回 observation 文本。
 
@@ -40,9 +43,11 @@ def dispatch_tool_call(name: str, arguments: dict[str, Any], registry: ToolRegis
     confirm_hook：verdict=="confirm" 且未 auto_approve 时，交互场景（agent/repl.py）
     可以传一个"问用户 y/N"的回调；不传时行为和以前一样——直接拦截。
     """
-    verdict = permissions.check(name, arguments, workdir)
+    verdict = permissions.check(
+        name, arguments, workdir, task_scopes, readonly_downgrade
+    )
     if verdict == "deny":
-        return "[权限层] 拒绝：越界写入 / 危险操作"
+        return "[权限层] 拒绝：路径超出当前用户任务作用域，或操作不安全"
     if verdict == "confirm" and not auto_approve:
         if confirm_hook is None or not confirm_hook(name, arguments):
             return f"[权限层] 需确认：{name}({arguments}) —— 已拦截（演示：默认不放行）"
@@ -84,6 +89,8 @@ class AgentLoop:
         self.on_event = on_event            # 交互界面渲染工具调用过程用；None 时零行为变化
         self.confirm_hook = confirm_hook    # 交互界面真实询问用户 y/N；None 时 confirm 级一律拦截
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+        self.task_scopes: tuple[Path, ...] = ()
+        self.readonly_downgrade = False
 
         # Day 8 规划层组件
         self.progress_tracker = ProgressTracker(max_no_progress=5, min_repeat=3)
@@ -96,10 +103,74 @@ class AgentLoop:
         self.reflection_tracker.reset()
         # 清空 TodoList（新会话）
         TODO.items.clear()
+        self.task_scopes = ()
+        self.readonly_downgrade = False
 
     def _emit(self, event: dict[str, Any]) -> None:
         if self.on_event is not None:
             self.on_event(event)
+
+    def _detect_task_scopes(self, user_input: str | list[dict[str, Any]]) -> tuple[Path, ...]:
+        """从用户输入提取明确存在的 Windows 绝对路径作为授权根。"""
+        if not isinstance(user_input, str):
+            return ()
+        quoted = re.findall(r'["\']([A-Za-z]:[\\/][^"\']+)["\']', user_input)
+        unquoted = re.findall(r'([A-Za-z]:[\\/][^\s"\'<>|?*]+)', user_input)
+        roots: list[Path] = []
+        for raw in quoted + unquoted:
+            raw = raw.rstrip(",，。；;:：)]}）】")
+            candidate = Path(raw).resolve()
+            if not candidate.exists():
+                continue
+            root = candidate
+            if root not in roots:
+                roots.append(root)
+        return tuple(roots)
+
+    def _inject_scope(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not self.task_scopes:
+            return messages
+        roots = "\n".join(f"- {scope}" for scope in self.task_scopes)
+        result = list(messages)
+        result.insert(1, {
+            "role": "system",
+            "content": (
+                "# 当前任务硬作用域\n"
+                f"仅允许读取、搜索和写入以下目标路径：\n{roots}\n"
+                "若目标是单个 PDF，仅额外允许其同名 TXT 缓存。\n"
+                "不得读取或审计外层 mini-OpenClaw 宿主工程。"
+            ),
+        })
+        return result
+
+    @staticmethod
+    def _requests_full_experiment(user_input: str | list[dict[str, Any]]) -> bool:
+        if not isinstance(user_input, str):
+            return False
+        text = user_input.lower()
+        markers = (
+            "完整跑", "跑一遍", "完整复现", "复现论文里的结果", "复现实验结果",
+            "开始训练", "执行训练", "下载数据集", "full training", "run the experiment",
+            "reproduce the results", "download the dataset",
+        )
+        return any(marker in text for marker in markers)
+
+    def _inject_execution_policy(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not self.readonly_downgrade:
+            return messages
+        result = list(messages)
+        result.insert(1, {
+            "role": "system",
+            "content": (
+                "# 强制只读降级策略\n"
+                "用户请求了完整训练、评估或数据下载。必须主动拒绝执行高成本步骤，"
+                "并降级为静态审计、配置检查、--help/版本/语法等毫秒级验证和复现计划。\n"
+                "最终答复开头必须明确写：『已拒绝执行完整训练和大型数据下载；"
+                "本次已按安全策略降级为静态分析与轻量验证。』\n"
+                "不要声称已复现论文结果；只能说明已完成审计或复现计划。"
+            ),
+        })
+        return result
 
     # ------------------------------------------------------------------
     # Day 8 步骤 3 · 每轮注入 todo 状态
@@ -114,9 +185,11 @@ class AgentLoop:
             return messages
 
         todo_prompt = (
-            "# 当前任务清单（推进它，别跑偏）\n"
+            "# 当前单层主清单（推进它，别跑偏）\n"
             + TODO.render()
             + f"\n\n进度：{TODO.progress_summary()}。"
+            + "\n已有主清单，禁止为当前子任务再次调用 todo_write 创建小清单；"
+              "直接执行并用 update_todo 更新这里的原任务 ID。"
         )
 
         next_pending = TODO.next_pending()
@@ -159,7 +232,7 @@ class AgentLoop:
         if self.progress_tracker.is_stuck():
             return (
                 f"[规划层] {self.progress_tracker.stuck_reason()}\n"
-                "请检查是否需要重新规划（用 todo_write 重写清单），"
+                "请检查是否需要整体重规划（必要时用 todo_write(replace=true) 重写一次主清单），"
                 "或把卡住的子任务标为 blocked 先做别的。\n"
                 f"当前清单：\n{TODO.render()}"
             )
@@ -206,6 +279,13 @@ class AgentLoop:
 
     def send(self, user_input: str | list[dict[str, Any]]) -> str:
         """追加一轮用户输入，跑 ReAct 直到给出最终答复；self.messages 跨调用累积，支持多轮对话。"""
+        # 每次用户输入都是一个新的执行任务。保留对话历史用于追问，但不能沿用
+        # 上一任务已经完成的 TODO/卡死计数，否则会在调用模型前直接返回“任务完成”。
+        TODO.items.clear()
+        self.progress_tracker.reset()
+        self.reflection_tracker.reset()
+        self.task_scopes = self._detect_task_scopes(user_input)
+        self.readonly_downgrade = self._requests_full_experiment(user_input)
         self.messages.append({"role": "user", "content": user_input})
 
         # 如果上一轮任务已全部完成，清空遗留的 TODO，避免 stop_reason()
@@ -231,6 +311,8 @@ class AgentLoop:
 
             # --- Day 8 步骤 3：每轮注入 todo 状态 ---
             ctx_messages = self._inject_todo(self.messages)
+            ctx_messages = self._inject_scope(ctx_messages)
+            ctx_messages = self._inject_execution_policy(ctx_messages)
 
             # --- 上下文压缩 ---
             self.messages = maybe_compact(self.messages)
@@ -281,7 +363,9 @@ class AgentLoop:
                 self.progress_tracker.record_action(name, arguments)
 
                 obs = dispatch_tool_call(name, arguments, self.registry, self.workdir,
-                                          self.auto_approve, self.confirm_hook)
+                                          self.auto_approve, self.confirm_hook,
+                                          self.task_scopes,
+                                          self.readonly_downgrade)
 
                 # Day 8 步骤 4：工具结果中注入反思提示
                 reflection = self._maybe_reflection_prompt(name, str(obs))
@@ -290,8 +374,12 @@ class AgentLoop:
 
                 self._emit({"type": "tool_result", "name": name, "observation": str(obs)})
 
-                # 检测 todo 推进（调用了 todo_write 或 update_todo）
-                if name in ("todo_write", "update_todo"):
+                # 只有实际创建/更新成功才算推进；被拒绝的嵌套 todo_write 不能
+                # 重置卡死计数，否则模型可反复建小清单直到耗尽轮次。
+                if (
+                    (name == "todo_write" and str(obs).startswith("任务主清单"))
+                    or (name == "update_todo" and "已标记为" in str(obs))
+                ):
                     had_todo_progress = True
 
                 self.messages.append({"role": "tool", "name": name,
