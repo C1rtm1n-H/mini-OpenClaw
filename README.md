@@ -1,67 +1,161 @@
-# mini-OpenClaw（学生 starter 仓库）
+# mini-OpenClaw：科研实验代码审计 Agent
 
-> 你将在这 10 天里，把这个骨架填成一个能在命令行里干活的通用智能体。
-> 每个模块里都有 `# TODO[DayN]` 标记，告诉你哪天该填哪里。
+mini-OpenClaw 是一个运行在命令行中的科研实验代码审计 Agent。它以 DeepSeek/OpenAI
+兼容接口作为推理后端，通过 ReAct 主循环编排文件、搜索、Shell、PDF、记忆、规划、
+MCP 和领域 Skills，在**不执行完整训练、不下载大型数据集**的前提下检查论文仓库的
+可复现性、危险副作用与实验配置。
 
-## 这是什么
+正式演示与验收入口是交互模式：
 
-mini-OpenClaw 是一个 Claude Code 式的命令行 Agent：
-一个**主循环**反复调用**大模型后端**，模型输出**工具调用**（read/write/bash/…），
-主循环执行工具、把结果喂回模型，直到任务完成。再叠加 **MCP**（可插拔外部工具）、
-**Skills**（可加载领域能力）和**安全层**（权限/沙箱/注入防护）。
-
-```
-你的请求 ──► [主循环 loop.py] ──► [后端 server.py ──► 大模型]
-                  ▲   │  模型输出 <tool_call>{...}</tool_call>
-                  │   ▼
-            tool result ◄── [工具分发：read/write/bash/edit/grep/...]
-                              ├── 内置工具 (tools/)
-                              ├── MCP 工具 (mcp/)
-                              └── Skills (skills/)
-```
-
-## 目录结构与建设节奏
-
-| 模块 | 你要做什么 | 哪天 |
-|------|-----------|------|
-| `backend/` | DeepSeek API 客户端（已给 `client.py`，配 key 即用）；Day2 连通后端 + 首个工具 schema | Day1–2 |
-| `prompt/` | render_prompt(messages, tools) 对话模板渲染 + parse_tool_calls | Day3 |
-| `agent/` | 系统提示词（Day2 起草，Day5 完善）、ReAct 主循环、上下文管理 | Day2, Day5, Day7 |
-| `tools/` | read/write/bash → edit/grep/glob → web_fetch/task_list | Day5, Day6, Day7 |
-| `mcp/` | 最小 MCP 客户端（stdio + JSON-RPC）| Day8 |
-| `skills/` | Skills 加载器 + 你领域的 Skill | Day9 |
-| `eval/` | 任务集 + 指标评测 + 消融 | Day7, Day10 |
-
-> 逐日构建目标详见各 `course/dayNN/lab-guide.md`；`grep -rn "TODO\[Day" .` 可看全部施工点。
-> 里程碑：**v1（Day6）** 端到端可用 · **v3（Day9）** 可扩展 · **终版（Day10）** 含安全层，Demo Day 展示（占总评 95%）。
-
-## 快速开始
-
-```bash
-# 1. Python 环境（agent 侧不吃显存）
-conda create -n openclaw python=3.11 && conda activate openclaw
-pip install -r requirements.txt
-
-# 2. 先跑通骨架的"假后端"自检（Day1 就能跑）
-python -m agent.cli --selfcheck
-
-# 3. 之后每天填对应模块，重跑相关入口
-
-# 4. Day10：无参数进入交互式多轮对话（Claude Code 式 REPL）
+```powershell
 python -m agent.cli
+```
 
-# 长论文等复杂任务：提高模型调用轮数和规划步数
-# max-steps 必须大于等于 max-turns
+## 核心能力
+
+- 审计训练入口、README 命令、参数默认值和配置文件是否一致。
+- 检查随机种子、数据划分、依赖、硬编码路径、指标实现和 GPU/资源配置。
+- 识别 `rm -rf`、覆盖固定结果、联网下载和长时间训练等风险。
+- 对完整训练请求主动降级为静态分析、复现计划和轻量验证。
+- PDF 文本提取带同名 TXT 缓存，避免重复转换长论文。
+- Todo 单层规划、错误 observation、无进展检测和上下文 compaction。
+- Markdown + KV 跨会话记忆。
+- MCP stdio 工具透明注册，领域 Skill 按需加载。
+- Trace 记录步骤、耗时、token 和估算成本。
+- 路径作用域、操作分级、交互确认、外部内容隔离和出站白名单。
+
+## 环境安装
+
+推荐 Python 3.11。项目不需要 PyTorch 或 TensorFlow。
+
+```powershell
+conda create -n openclaw python=3.11
+conda activate openclaw
+python -m pip install -r requirements.txt
+```
+
+配置后端：
+
+```powershell
+$env:DEEPSEEK_API_KEY="你的密钥"
+$env:DEEPSEEK_BASE_URL="https://api.deepseek.com"   # 可选
+$env:DEEPSEEK_MODEL="deepseek-chat"                 # 可选
+```
+
+如果使用 Aihubmix 等 OpenAI 兼容服务，可把 `DEEPSEEK_BASE_URL` 设置为站点根地址或
+以 `/v1` 结尾的地址。密钥不要写入代码或提交 Git。
+
+Windows 出现中文/emoji 乱码时，先执行：
+
+```powershell
+$env:PYTHONIOENCODING="utf-8"
+```
+
+使用 `conda run` 时建议关闭 Conda 的输出捕获：
+
+```powershell
+conda run --no-capture-output -n openclaw python -m agent.cli --selfcheck
+```
+
+## 启动与现场测试
+
+先做离线自检：
+
+```powershell
+python -m agent.cli --selfcheck
+```
+
+进入正式交互模式：
+
+```powershell
+python -m agent.cli
+```
+
+长任务可以提高预算：
+
+```powershell
 python -m agent.cli --max-turns 100 --max-steps 160
 ```
 
-## 里程碑
+`--max-steps` 不能小于 `--max-turns`。交互界面支持 `/` 命令、Skill 管理和连续任务。
 
-- **v1（Day6）**：`python -m agent.cli "创建 hello.py 并运行输出当前时间"` 能完成。
-- **v3（Day9）**：能加载 MCP server 工具 + 自定义 Skill。
-- **终版（Day10）**：含安全层，Demo Day 现场任务。
+推荐验收指令：
 
-## 约定
+```text
+审一下这个仓库能不能复现，别真跑训练：C:\path\to\repo
+把这个实验完整跑一遍，复现论文里的结果：C:\path\to\repo
+审一下这个仓库，检查训练脚本是否存在危险操作：C:\path\to\repo
+复现 C:\path\to\paper.pdf
+```
 
-- 全程一个 git 仓库，**按 day 打 tag**（`v1`, `v3`, `final`）。
-- 每个模块自带一个 `README.md`，记录你的设计决策（技术文档分数来源）。
+## 权限与确认
+
+确认提示是安全机制，不是卡死：
+
+| 操作 | 默认判定 |
+|---|---|
+| `read` / `grep` / `glob` | 在任务作用域内直接放行 |
+| `write` / `edit` | 限制路径并要求确认 |
+| `bash` / `web_fetch` | 要求确认；危险训练、下载命令直接拒绝 |
+| `pdf_extract` | 有效缓存直接复用；新建或覆盖缓存时确认 |
+| 记忆 / Todo / Skill 加载 | 元操作直接放行 |
+| 未分类或 MCP 工具 | 保守地要求确认 |
+
+交互界面显示 `Enter=放行 N=拒绝`。即使用户确认，权限层或 Shell 沙箱判定为危险的
+命令仍不会执行。
+
+## 架构
+
+```text
+用户输入
+  → CLI / REPL
+  → AgentLoop（ReAct + Todo + compaction + trace）
+  → 后端生成 tool_calls
+  → 权限判定与交互确认
+  → 内置工具 / MCP 工具
+  → observation 回填模型
+  → 最终答复与 session trace
+```
+
+| 模块 | 说明 | 文档 |
+|---|---|---|
+| `agent/` | CLI、REPL、主循环、规划、记忆、权限、trace | [agent/README.md](agent/README.md) |
+| `backend/` | DeepSeek/OpenAI 兼容客户端、Fake 和视觉后端 | [backend/README.md](backend/README.md) |
+| `tools/` | 内置工具、Shell 沙箱、外部内容隔离 | [tools/README.md](tools/README.md) |
+| `mcp/` | stdio JSON-RPC 客户端和示例 server | [mcp/README.md](mcp/README.md) |
+| `skills/` | Skill 发现、召回、启停和领域流程 | [skills/README.md](skills/README.md) |
+| `security/` | 红队用例和安全报告 | [security/README.md](security/README.md) |
+| `eval/` | 任务判据、指标、消融和 Judge | [eval/README.md](eval/README.md) |
+| `prompt/` | 旧式文本工具调用渲染兼容层 | [prompt/README.md](prompt/README.md) |
+
+## 可观测性与产物
+
+每次交互会话在 `session/<时间戳>/` 生成：
+
+- `trace.jsonl`：LLM 和工具 span。
+- `summary.txt`：调用次数、token 与估算成本。
+
+论文 TXT 缓存和审计报告是任务产物，不应与模型声称的“论文结果已复现”混淆。
+
+## 安全边界
+
+- 审计默认只读，不主动修改用户仓库。
+- 不执行完整训练、完整评估或大型数据下载。
+- 不自动安装依赖。
+- 用户明确给出的文件或目录是任务硬作用域，不能转而扫描宿主工程。
+- 文件和网页内容由 `<external>` 边界标记为数据，不能当作指令执行。
+- `web_fetch` 只允许白名单域名。
+- 删除、覆盖、提交 Git 等高影响动作需要明确授权或直接阻断。
+
+## 验证命令
+
+```powershell
+python -m agent.cli --selfcheck
+python -m agent.cli --selfcheck --mcp-command "python -m mcp.calc_server"
+python -m eval.metrics
+python -m eval.ablation
+python -m security.redteam
+python -m compileall -q agent backend tools mcp skills eval security
+```
+
+消融当前仍是小规模样本轨迹，只能证明评测管道可运行，不能替代真实模型多次实验。
