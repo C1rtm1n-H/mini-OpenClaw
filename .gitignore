@@ -32,5 +32,8 @@ build/
 # Jupyter
 .ipynb_checkpoints/
 
+# Session traces (Day 9)
+session/
+
 # Claude
 .claude/

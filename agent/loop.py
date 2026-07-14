@@ -1,4 +1,4 @@
-"""ReAct 主循环（Agent 的心脏）+ Day 8 规划层集成。
+"""ReAct 主循环（Agent 的心脏）+ Day 8 规划层集成 + Day 9 可观测性。
 
   while 没到最终答复:
       assistant = backend.chat(messages, tools)      # 模型这一步：思考 or 调工具
@@ -14,6 +14,10 @@ Day 8 新增（规划层）：
   - 无进展检测 + 循环检测，防止原地打转烧 token。
   - 完成判据 + 步数预算，任务能正常终止。
   - 反思/重试接入点（通过工具结果反馈触发）。
+
+Day 9 新增（可观测性）：
+  - Tracer 把每次 LLM/工具调用记成 span，可回放。
+  - token 用量从 backend 返回的 usage 自动采集。
 """
 from __future__ import annotations
 from pathlib import Path
@@ -26,6 +30,7 @@ from agent.planning import (
     TODO, ProgressTracker, ReflectionTracker,
     stop_reason, TransientError, PermanentError, with_retry,
 )
+from agent.tracer import Tracer
 from tools.base import ToolRegistry
 
 
@@ -78,7 +83,8 @@ class AgentLoop:
                  max_turns: int = 20, max_steps: int = 40,
                  workdir: str | Path = ".", auto_approve: bool = False,
                  on_event: Callable[[dict[str, Any]], None] | None = None,
-                 confirm_hook: Callable[[str, dict[str, Any]], bool] | None = None):
+                 confirm_hook: Callable[[str, dict[str, Any]], bool] | None = None,
+                 tracer: Tracer | None = None):
         self.backend = backend
         self.registry = registry
         self.system_prompt = system_prompt
@@ -88,6 +94,7 @@ class AgentLoop:
         self.auto_approve = auto_approve    # True 时放行 confirm 级判定
         self.on_event = on_event            # 交互界面渲染工具调用过程用；None 时零行为变化
         self.confirm_hook = confirm_hook    # 交互界面真实询问用户 y/N；None 时 confirm 级一律拦截
+        self.tracer = tracer or Tracer()    # Day 9：可观测性（无 session 时用内存版）
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         self.task_scopes: tuple[Path, ...] = ()
         self.readonly_downgrade = False
@@ -180,6 +187,11 @@ class AgentLoop:
         """防漂移的根本手段（讲义 §8.3）：每轮把当前 todo 状态拼进上下文。
 
         模型每步都知道"整体到哪了、下一条做什么"，避免重复已完成项、遗漏未完成项。
+
+        Day 9 优化（前缀缓存友好排序，讲义 §7.1）：
+        把 todo 状态追加到上下文**末尾**（role="user"），而不是插入到 system prompt
+        后面。这样稳定的 system prompt 永远是完整可缓存的前缀，而每轮变化的 todo
+        只影响最后一条消息——前缀缓存命中率最大化。
         """
         if not TODO.items:
             return messages
@@ -200,22 +212,10 @@ class AgentLoop:
         if current:
             todo_prompt += f"\n当前进行中：{current['id']} {current['text']}"
 
-        # 注入：在 system prompt 和最近一轮 user 之间插入，作为系统级提醒
-        # 找到 system 消息的位置，在它后面插入
-        for i, m in enumerate(messages):
-            if m.get("role") == "system" and "当前任务清单" not in str(m.get("content", "")):
-                # 在最后一个 system 消息后面插入
-                last_system_idx = max(
-                    j for j, msg in enumerate(messages)
-                    if msg.get("role") == "system"
-                )
-                result = list(messages)
-                result.insert(last_system_idx + 1, {
-                    "role": "system",
-                    "content": todo_prompt,
-                })
-                return result
-        return messages
+        # Day 9：追加到末尾而不是插入到 system 后面 → 前缀缓存友好
+        result = list(messages)
+        result.append({"role": "user", "content": todo_prompt})
+        return result
 
     # ------------------------------------------------------------------
     # Day 8 步骤 5 · 无进展 / 卡死检测
@@ -318,9 +318,21 @@ class AgentLoop:
             self.messages = maybe_compact(self.messages)
             ctx_messages = maybe_compact(ctx_messages)
 
-            # --- 调用后端 ---
+            # --- 调用后端（Day 9：用 Tracer 包裹）---
             try:
-                assistant = self.backend.chat(ctx_messages, tools=self.registry.schemas())
+                assistant = self.tracer.span(
+                    "llm", "decide",
+                    lambda: self.backend.chat(ctx_messages, tools=self.registry.schemas()),
+                )
+                # 从后端返回提取 usage，记入 LLM span
+                usage = assistant.get("usage", {})
+                if usage:
+                    self.tracer.update_last(
+                        "llm",
+                        tokens=usage.get("total_tokens"),
+                        prompt_tokens=usage.get("prompt_tokens"),
+                        completion_tokens=usage.get("completion_tokens"),
+                    )
             except Exception as e:  # noqa: BLE001
                 return f"错误：后端调用失败：{e}"
 
@@ -362,10 +374,16 @@ class AgentLoop:
                 # Day 8 步骤 5：记录动作供卡死检测
                 self.progress_tracker.record_action(name, arguments)
 
-                obs = dispatch_tool_call(name, arguments, self.registry, self.workdir,
-                                          self.auto_approve, self.confirm_hook,
-                                          self.task_scopes,
-                                          self.readonly_downgrade)
+                # Day 9：用 Tracer 包裹工具执行
+                obs = self.tracer.span(
+                    "tool", name,
+                    lambda n=name, a=arguments: dispatch_tool_call(
+                        n, a, self.registry, self.workdir,
+                        self.auto_approve, self.confirm_hook,
+                        self.task_scopes,
+                        self.readonly_downgrade,
+                    ),
+                )
 
                 # Day 8 步骤 4：工具结果中注入反思提示
                 reflection = self._maybe_reflection_prompt(name, str(obs))

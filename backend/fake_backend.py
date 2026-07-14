@@ -14,6 +14,26 @@ from typing import Any
 class FakeBackend:
     """规则驱动的假模型：只为打通管道，不要当真。"""
 
+    def _result(self, content: str, tool_calls: list | None = None) -> dict[str, Any]:
+        """构造归一化返回，自动附加模拟 usage。"""
+        tool_calls = tool_calls or []
+        return {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": tool_calls,
+            "usage": self._fake_usage(content, tool_calls),
+        }
+
+    @staticmethod
+    def _fake_usage(content: str, tool_calls: list) -> dict:
+        """生成模拟 usage，让 Tracer 在离线模式也能工作。"""
+        prompt_tokens = 200
+        completion_tokens = len(content) // 4 + sum(
+            len(str(c.get("arguments", ""))) // 4 for c in tool_calls
+        )
+        return {"prompt_tokens": prompt_tokens, "completion_tokens": max(completion_tokens, 10),
+                "total_tokens": prompt_tokens + max(completion_tokens, 10)}
+
     def chat(self, messages: list[dict[str, Any]], tools: list[dict] | None = None) -> dict[str, Any]:
         tools = tools or []
         tool_names = [t["function"]["name"] for t in tools]
@@ -23,51 +43,37 @@ class FakeBackend:
         if messages and messages[-1].get("role") == "tool":
             last_tool = messages[-1].get("name", "")
             if last_tool == "grep" and "report.md" in str(user_task) and "write" in tool_names:
-                return {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{
-                        "id": "fake_write_report",
-                        "name": "write",
-                        "arguments": {
-                            "path": "report.md",
-                            "content": "# TODO 汇总\n\n" + str(last),
-                        },
-                    }],
-                }
-            return {"role": "assistant", "content": f"[FakeBackend] 已根据工具结果完成：{str(last)[:120]}", "tool_calls": []}
+                return self._result("", [{
+                    "id": "fake_write_report", "name": "write",
+                    "arguments": {"path": "report.md", "content": "# TODO 汇总\n\n" + str(last)},
+                }])
+            return self._result(f"[FakeBackend] 已根据工具结果完成：{str(last)[:120]}")
 
         task = str(user_task)
         if ("记住" in task or "remember" in task.lower()) and "remember" in tool_names:
-            note = task.strip()
-            return {"role": "assistant", "content": "", "tool_calls": [{"id": "fake_remember", "name": "remember", "arguments": {"note": note}}]}
+            return self._result("", [{"id": "fake_remember", "name": "remember", "arguments": {"note": task.strip()}}])
 
         if ("忘记" in task or "遗忘" in task or "forget" in task.lower()) and "forget" in tool_names:
-            key = task.strip()
-            return {"role": "assistant", "content": "", "tool_calls": [{"id": "fake_forget", "name": "forget", "arguments": {"key": key}}]}
+            return self._result("", [{"id": "fake_forget", "name": "forget", "arguments": {"key": task.strip()}}])
 
         if "echo" in task.lower() or "原样返回" in task:
             echo_tool = "mcp__echo" if "mcp__echo" in tool_names else ("echo" if "echo" in tool_names else None)
             if echo_tool:
                 text = _extract_quoted(task) or task
-                return {"role": "assistant", "content": "", "tool_calls": [{"id": "fake_echo", "name": echo_tool, "arguments": {"text": text}}]}
+                return self._result("", [{"id": "fake_echo", "name": echo_tool, "arguments": {"text": text}}])
 
         if ("TODO" in task or "todo" in task.lower()) and "report.md" in task and "grep" in tool_names:
-            return {"role": "assistant", "content": "", "tool_calls": [{"id": "fake_grep_todo", "name": "grep", "arguments": {"pattern": "TODO|FIXME", "path": "."}}]}
+            return self._result("", [{"id": "fake_grep_todo", "name": "grep", "arguments": {"pattern": "TODO|FIXME", "path": "."}}])
 
         if "add" in task.lower() and "mcp__add" in tool_names:
             nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", task)]
             a, b = (nums + [0, 0])[:2]
-            return {"role": "assistant", "content": "", "tool_calls": [{"id": "fake_add", "name": "mcp__add", "arguments": {"a": a, "b": b}}]}
+            return self._result("", [{"id": "fake_add", "name": "mcp__add", "arguments": {"a": a, "b": b}}])
 
         if tools and any(k in task for k in ("文件", "运行", "file", "run", "hello")):
-            name = tools[0]["function"]["name"]
-            return {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [{"id": "fake_default", "name": name, "arguments": {}}],
-            }
-        return {"role": "assistant", "content": "[FakeBackend] 你好，我是离线占位后端。配好 DEEPSEEK_API_KEY 即用真模型。", "tool_calls": []}
+            return self._result("", [{"id": "fake_default", "name": tools[0]["function"]["name"], "arguments": {}}])
+
+        return self._result("[FakeBackend] 你好，我是离线占位后端。配好 DEEPSEEK_API_KEY 即用真模型。")
 
 
 def _extract_quoted(text: str) -> str | None:

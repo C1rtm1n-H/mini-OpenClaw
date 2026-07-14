@@ -4,15 +4,30 @@
   python -m agent.cli --selfcheck          # Day1：自检骨架是否装好
   python -m agent.cli "创建 hello.py 并运行"  # Day5 起：真正跑任务（v1 在 Day6）
   python -m agent.cli                      # 无参数进入交互式多轮对话
+
+Day 9：每次启动交互模式时在 session/ 下新建时间戳文件夹，记录 trace.jsonl 等数据。
 """
 from __future__ import annotations
 import argparse
 import shlex
 import sys
+from datetime import datetime
+from pathlib import Path
 
 from tools.base import ToolRegistry, build_default_registry
 from agent.prompts import SYSTEM_PROMPT
 from skills.loader import load_skills, skills_catalog
+
+# 项目根目录（cli.py 在 agent/ 下，往上一级）
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _create_session_dir() -> Path:
+    """在项目根目录 session/ 下创建时间戳子文件夹，返回其路径。"""
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    session_dir = _PROJECT_ROOT / "session" / ts
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return session_dir
 
 
 def _start_mcp(reg: ToolRegistry, command: list[str]) -> object:
@@ -71,13 +86,16 @@ def selfcheck(mcp_commands: list[str] | None = None) -> int:
     return 0 if ok else 1
 
 
-def _build_agent(args: argparse.Namespace):
+def _build_agent(args: argparse.Namespace, session_dir: Path | None = None):
     """组装一次任务/一次会话都要用的 AgentLoop：选后端、接 MCP、加 Skills。
 
     一次性任务模式和 REPL 模式共用这段逻辑，避免两处各写一遍容易跑偏。
     返回 (AgentLoop 实例, mcp clients 列表)；调用方负责在结束时关闭 clients。
+
+    Day 9：session_dir 不为 None 时创建 Tracer 并持久化到该目录。
     """
     from agent.loop import AgentLoop
+    from agent.tracer import Tracer
 
     reg = build_default_registry()
     clients = []
@@ -102,7 +120,7 @@ def _build_agent(args: argparse.Namespace):
                     close()
             raise
         from backend.fake_backend import FakeBackend
-        print(f"[提示] 未启用真后端（{e}），回退 FakeBackend。配置 DEEPSEEK_API_KEY 后即用真模型。")
+        print(f"[提示] 未启用真后端（{e}），回退 FakeBackend。配置 DEEPSEEK_API_KEY 即用真模型。")
         backend = FakeBackend()
 
     skills = load_skills()
@@ -119,12 +137,16 @@ def _build_agent(args: argparse.Namespace):
     if recalled.strip():
         system += "\n\n# 关于本项目 / 用户的已知记忆（相关时遵循）\n" + recalled
 
+    # Day 9：创建 Tracer（有 session_dir 时持久化到文件）
+    tracer = Tracer(session_dir=session_dir) if session_dir else Tracer()
+
     agent = AgentLoop(
         backend,
         reg,
         system,
         max_turns=args.max_turns,
         max_steps=args.max_steps,
+        tracer=tracer,
     )
     return agent, clients
 
@@ -154,8 +176,11 @@ def main(argv: list[str] | None = None) -> int:
         return selfcheck(args.mcp_command)
 
     if not args.task:
+        # ── 交互式多轮对话（Day 9：创建 session 目录）──
+        session_dir = _create_session_dir()
+        print(f"[session] 数据目录：{session_dir}")
         try:
-            agent, clients = _build_agent(args)
+            agent, clients = _build_agent(args, session_dir=session_dir)
         except Exception as e:  # noqa
             print(f"错误：{e}")
             return 2
@@ -163,15 +188,13 @@ def main(argv: list[str] | None = None) -> int:
             from agent.repl import run_repl
             run_repl(agent)
         finally:
-            for client in clients:
-                close = getattr(client, "close", None)
-                if close:
-                    close()
+            _finish_session(agent, session_dir, clients)
         return 0
 
-    # 一次性任务：优先用 DeepSeek API；没配 key 时回退到 FakeBackend（离线打通管道）
+    # ── 一次性任务（Day 9：也创建 session 目录以便调试）──
+    session_dir = _create_session_dir()
     try:
-        agent, clients = _build_agent(args)
+        agent, clients = _build_agent(args, session_dir=session_dir)
     except Exception as e:  # noqa
         print(f"错误：{e}")
         return 2
@@ -183,11 +206,25 @@ def main(argv: list[str] | None = None) -> int:
             user_task = user_content(args.task, args.image)
         print(agent.run(user_task))
     finally:
-        for client in clients:
-            close = getattr(client, "close", None)
-            if close:
-                close()
+        _finish_session(agent, session_dir, clients)
     return 0
+
+
+def _finish_session(agent, session_dir: Path, clients: list) -> None:
+    """会话结束后的清理：关闭 MCP、保存 trace 摘要。"""
+    from agent.tracer import replay, cost_report
+    for client in clients:
+        close = getattr(client, "close", None)
+        if close:
+            close()
+    tracer = getattr(agent, "tracer", None)
+    if tracer is not None:
+        tracer.save_summary()
+        print(f"\n[session] trace 已保存到 {session_dir}")
+        print(f"[session] 共 {len(tracer.spans)} 步：")
+        replay(tracer)
+        print()
+        cost_report(tracer)
 
 
 if __name__ == "__main__":

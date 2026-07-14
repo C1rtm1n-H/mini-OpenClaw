@@ -77,8 +77,10 @@ class DeepSeekBackend:
             json=payload,
         )
         self._raise_for_status(resp)
-        msg = resp.json()["choices"][0]["message"]
-        return self._normalize(msg)
+        body = resp.json()
+        msg = body["choices"][0]["message"]
+        usage = body.get("usage")
+        return self._normalize(msg, usage)
 
     # --- 把内部 messages（含 role=tool）转成 OpenAI 标准格式 ---
     def _to_openai_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -127,7 +129,7 @@ class DeepSeekBackend:
 
     # --- 把 OpenAI 返回归一化成内部格式 ---
     @staticmethod
-    def _normalize(msg: dict[str, Any]) -> dict[str, Any]:
+    def _normalize(msg: dict[str, Any], usage: dict[str, int] | None = None) -> dict[str, Any]:
         tool_calls = []
         for tc in (msg.get("tool_calls") or []):
             fn = tc.get("function", {})
@@ -136,7 +138,11 @@ class DeepSeekBackend:
             except json.JSONDecodeError:
                 args = {}
             tool_calls.append({"id": tc.get("id"), "name": fn.get("name"), "arguments": args})
-        return {"role": "assistant", "content": msg.get("content") or "", "tool_calls": tool_calls}
+        result: dict[str, Any] = {"role": "assistant", "content": msg.get("content") or "",
+                                   "tool_calls": tool_calls}
+        if usage:
+            result["usage"] = usage
+        return result
 
 
 class VisionBackend(DeepSeekBackend):
