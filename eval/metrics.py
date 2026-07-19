@@ -20,35 +20,31 @@ FALLBACK_JSON_RE = re.compile(r"<tool_call>\s*(\{.*)", re.DOTALL)
 
 SAMPLE_RECORDS: list[dict[str, Any]] = [
     {
-        "task": "read-config",
+        "task": "audit-bad-experiment",
         "steps": [
-            {"tool_calls": [{"name": "read", "arguments": {"path": "config.json"}}],
-             "tool_results": [{"name": "read", "observation": '{"timeout": 30}', "ok": True}],
-             "raw": '<tool_call>{"name":"read","arguments":{"path":"config.json"}}</tool_call>',
+            {"tool_calls": [{"name": "glob", "arguments": {"pattern": "*.py", "path": "eval_sample/bad_experiment"}},
+             {"name": "grep", "arguments": {"pattern": "seed|/home/|cuda:0", "path": "eval_sample/bad_experiment"}},
+             {"name": "read", "arguments": {"path": "eval_sample/bad_experiment/train.py"}}],
+             "tool_results": [
+                 {"name": "glob", "observation": "train.py\nevaluate.py\nconfig.yaml", "ok": True},
+                 {"name": "grep", "observation": "train.py:85:  # no random seed set", "ok": True},
+                 {"name": "read", "observation": "DEVICE = 'cuda:0'\nDATA_DIR = '/home/user/data/'", "ok": True},
+             ],
+             "raw": '<tool_call>{"name":"glob","arguments":{"pattern":"*.py","path":"eval_sample/bad_experiment"}}</tool_call>',
              "prompt_tokens": 310, "completion_tokens": 22},
         ],
-        "final": "config.json 里 timeout = 30 秒。",
+        "final": "发现3个缺陷：1) train.py:85 未设置随机种子 2) train.py:32 硬编码cuda:0 3) requirements.txt缺少scikit-learn。建议在train()开头添加torch.manual_seed(42)，将硬编码路径改为命令行参数。",
     },
     {
-        "task": "list-dir",
-        "steps": [
-            {"tool_calls": [{"name": "glob", "arguments": {"pattern": "*", "path": "."}}],
-             "tool_results": [{"name": "glob", "observation": "README.md\nagent\neval", "ok": True}],
-             "raw": '<tool_call>{"name":"glob","arguments":{"pattern":"*","path":"."}}</tool_call>',
-             "prompt_tokens": 290, "completion_tokens": 18},
-        ],
-        "final": "当前目录有：README.md、agent、eval。",
-    },
-    {
-        "task": "read-config",
+        "task": "audit-bad-experiment",
         "steps": [
             {"tool_calls": [],
-             "raw": '<tool_call>{"name":"read","arguments":{"path":',
+             "raw": '<tool_call>{"name":"glob","arguments":{"pattern":',
              "prompt_tokens": 305, "completion_tokens": 12},
-            {"tool_calls": [], "raw": "我不确定 timeout 的值。",
+            {"tool_calls": [], "raw": "未发现明显的可复现性问题。",
              "prompt_tokens": 340, "completion_tokens": 15},
         ],
-        "final": "我不确定 timeout 的值。",
+        "final": "代码看起来没有明显的可复现性问题。",
     },
 ]
 
