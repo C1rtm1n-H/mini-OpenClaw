@@ -16,26 +16,27 @@ class ToolBackend:
         if self.calls == 1:
             return {
                 "content": "",
-                "tool_calls": [{"id": "c1", "name": "read", "arguments": {"path": "config.json"}}],
+                "tool_calls": [{"id": "c1", "name": "glob", "arguments": {"pattern": "*"}}],
                 "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
             }
         return {
-            "content": "timeout = 30 秒。",
+            "content": "当前目录有：README.md、agent、eval。",
             "tool_calls": [],
             "usage": {"prompt_tokens": 20, "completion_tokens": 6, "total_tokens": 26},
         }
 
 
 class TaskLike:
-    name = "read-config"
-    instruction = "读取 config.json，告诉我 timeout 是多少"
+    name = "audit-bad-experiment"
+    instruction = "审计 eval_sample/bad_experiment/ 目录下的实验代码可复现性"
 
 
 class EvalTrajectoryTest(unittest.TestCase):
     def test_agent_loop_sink_records_final_usage_and_full_tool_result(self):
         registry = ToolRegistry()
-        registry.register(Tool("read", "read file", {"type": "object", "properties": {}},
-                               lambda path: '{"timeout": 30, "long": "' + "x" * 900 + '"}'))
+        long_output = "x" * 900
+        registry.register(Tool("glob", "list files", {"type": "object", "properties": {}},
+                               lambda pattern: f"README.md\nagent\neval\n{long_output}"))
         recorder = TrajectoryRecorder(TaskLike(), agent_meta={"backend": "ToolBackend"})
         loop = AgentLoop(
             ToolBackend(),
@@ -50,15 +51,15 @@ class EvalTrajectoryTest(unittest.TestCase):
         final = loop.run(TaskLike.instruction)
         record = recorder.finish(final=final, spans=loop.tracer.spans)
 
-        self.assertEqual(record["final"], "timeout = 30 秒。")
+        self.assertEqual(record["final"], "当前目录有：README.md、agent、eval。")
         self.assertEqual(record["status"], "completed")
         self.assertEqual(record["summary"]["tokens"], 41)
-        self.assertEqual(record["steps"][0]["tool_calls"][0]["name"], "read")
+        self.assertEqual(record["steps"][0]["tool_calls"][0]["name"], "glob")
         observation = record["steps"][0]["tool_results"][0]["observation"]
-        self.assertIn('"timeout": 30', observation)
+        self.assertIn("README.md", observation)
         self.assertGreater(len(observation), 900)
         digest = record_to_judge_digest(record)
-        self.assertIn("timeout = 30", digest)
+        self.assertIn("agent", digest)
         self.assertIn("tool_call", digest)
 
 
