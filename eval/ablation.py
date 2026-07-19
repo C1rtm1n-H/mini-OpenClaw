@@ -1,48 +1,87 @@
-"""最小消融：有/无 system-prompt 两组样本轨迹的成功率对比。
+"""真实轨迹消融：固定任务集，只改变 system prompt variant。"""
+from __future__ import annotations
 
-讲义 §9.5：没有对照，任何"变好了"的说法都不可信。
-这里固定任务集，只改一个因素（有/无 system-prompt），比较成功率与 token 用量。
-D5 将用同样的方法量化上下文压缩策略的效果。
-"""
-from eval.tasks import SAMPLE_TASKS
-from eval.metrics import success_rate, token_count
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
 
-# A 组：带 system-prompt（agent 被告知"需要时用 <tool_call> 调工具"）——都成功
-GROUP_WITH_SYS = [
-    {"task": "read-config",
-     "steps": [{"tool_calls": [{"name": "read", "arguments": {"path": "config.json"}}],
-                "raw": '<tool_call>{"name":"read","arguments":{"path":"config.json"}}</tool_call>',
-                "prompt_tokens": 330, "completion_tokens": 22}],
-     "final": "config.json 里 timeout = 30 秒。"},
-    {"task": "list-dir",
-     "steps": [{"tool_calls": [{"name": "bash", "arguments": {"command": "ls"}}],
-                "raw": '<tool_call>{"name":"bash","arguments":{"command":"ls"}}</tool_call>',
-                "prompt_tokens": 300, "completion_tokens": 18}],
-     "final": "当前目录有：main.py config.json README.md"},
-]
-
-# B 组：无 system-prompt（agent 不知道工具约定，直接瞎答）——都失败
-GROUP_NO_SYS = [
-    {"task": "read-config",
-     "steps": [{"tool_calls": [], "raw": "timeout 应该是个常见的默认值。",
-                "prompt_tokens": 120, "completion_tokens": 14}],
-     "final": "timeout 应该是个常见的默认值。"},
-    {"task": "list-dir",
-     "steps": [{"tool_calls": [], "raw": "你可以自己用 ls 看看。",
-                "prompt_tokens": 110, "completion_tokens": 12}],
-     "final": "你可以自己用 ls 看看。"},
-]
+from eval.runner import run_suite
+from eval.tasks import select_tasks
+from eval.trajectory import write_json
 
 
-def summarize(name: str, recs: list) -> float:
-    sr = success_rate(SAMPLE_TASKS, recs)
-    avg_tok = sum(token_count(r) for r in recs) / len(recs)
-    print(f"{name:16s} 成功率={sr:.2f}  平均token={avg_tok:.0f}")
-    return sr
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="基于真实 AgentLoop 轨迹做 system prompt 消融")
+    parser.add_argument("--backend", choices=["auto", "real", "fake"], default="auto")
+    parser.add_argument("--tasks", default="read-config,domain-scan-todos",
+                        help="逗号分隔任务名；默认选两个只读任务做最小消融")
+    parser.add_argument("--repeat", type=int, default=1)
+    parser.add_argument("--max-turns", type=int, default=8)
+    parser.add_argument("--max-steps", type=int, default=20)
+    parser.add_argument("--workdir", default=".")
+    parser.add_argument("--out", help="输出根目录；默认 eval/runs/<timestamp>-ablation")
+    parser.add_argument("--judge", action="store_true")
+    parser.add_argument("--judge-model")
+    args = parser.parse_args(argv)
+
+    names = [part.strip() for part in args.tasks.split(",") if part.strip()]
+    tasks = select_tasks(names, readonly_only=True)
+    root = Path(args.out) if args.out else Path("eval/runs") / f"{time.strftime('%Y%m%d-%H%M%S')}-ablation"
+    root.mkdir(parents=True, exist_ok=True)
+
+    variants = {
+        "default": root / "default-system",
+        "minimal": root / "minimal-system",
+    }
+    results = {}
+    for variant, out_dir in variants.items():
+        results[variant] = run_suite(
+            tasks,
+            out_dir=out_dir,
+            backend_kind=args.backend,
+            system_variant=variant,
+            workdir=Path(args.workdir),
+            max_turns=args.max_turns,
+            max_steps=args.max_steps,
+            repeat=args.repeat,
+            run_judge=args.judge,
+            judge_model=args.judge_model,
+        )["summary"]
+
+    comparison = {
+        "variable": "system_prompt",
+        "fixed": {
+            "tasks": [task.name for task in tasks],
+            "backend": args.backend,
+            "repeat": args.repeat,
+            "max_turns": args.max_turns,
+            "max_steps": args.max_steps,
+            "workdir": str(Path(args.workdir).resolve()),
+        },
+        "variants": results,
+        "deltas": _deltas(results.get("default", {}), results.get("minimal", {})),
+        "limitations": [
+            "小样本消融只能验证 harness 与趋势，不能当作稳健模型能力结论。",
+            "LLM-as-judge 有方差和偏差，正式报告需要人工抽查校准。",
+            "默认 runner 只启用 read/grep/glob，结论限定于只读任务。",
+        ],
+    }
+    write_json(root / "comparison.json", comparison)
+    print(json.dumps(comparison, ensure_ascii=False, indent=2))
+    print(f"输出目录：{root}")
+    return 0
+
+
+def _deltas(default: dict, minimal: dict) -> dict:
+    keys = ["programmatic_success_rate", "judge_pass_rate", "hybrid_success_rate", "avg_tokens", "tool_success_rate"]
+    out = {}
+    for key in keys:
+        if isinstance(default.get(key), (int, float)) and isinstance(minimal.get(key), (int, float)):
+            out[key] = default[key] - minimal[key]
+    return out
 
 
 if __name__ == "__main__":
-    print("=== 消融：有/无 system-prompt ===\n")
-    a = summarize("有 system-prompt", GROUP_WITH_SYS)
-    b = summarize("无 system-prompt", GROUP_NO_SYS)
-    print(f"\n结论：system-prompt 使成功率 {b:.2f} -> {a:.2f}（Δ={a - b:+.2f}）")
+    raise SystemExit(main(sys.argv[1:]))

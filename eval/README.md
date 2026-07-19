@@ -1,33 +1,54 @@
 # eval 模块
 
-`eval/` 提供任务判据、轨迹指标、Judge、消融和 trace 示例，用于把“看起来能用”变成
-可重复检查的数据。
+`eval/` 提供任务判据、真实轨迹记录、LLM-as-judge、指标汇总和消融，用于把“看起来能用”变成可重复检查的数据。
 
 ## 文件职责
 
 | 文件 | 作用 |
 |---|---|
-| `tasks.py` | Task 定义和程序化成功判据 |
-| `metrics.py` | 成功率、步数、token、tool-call JSON 合法率 |
-| `judge.py` | 开放式输出的 LLM-as-Judge 示例 |
-| `ablation.py` | 有/无 system prompt 的最小消融 |
-| `ablation_notes.md` | 实验设计、结果、限制与改进计划 |
-| `trace_sample.jsonl` | 示例轨迹 |
-| `tracer.py` | 早期评测 trace 示例；生产 trace 位于 `agent/tracer.py` |
+| `tasks.py` | Task 定义、只读默认任务集、可解释程序化判据 |
+| `trajectory.py` | 将 `AgentLoop` 事件聚合为 canonical eval record，并读写 JSONL |
+| `runner.py` | 运行真实 `AgentLoop`，保存 `records.jsonl` / `judgments.jsonl` / `summary.json` |
+| `metrics.py` | 成功率、步数、token、tool-call JSON 合法率、judge/tool/safety 聚合指标 |
+| `judge.py` | 基于最终答案 + 轨迹证据的 LLM-as-judge |
+| `ablation.py` | 基于真实轨迹的 system prompt 消融 |
+| `tracer.py` | 早期评测 trace 示例；生产 span tracer 位于 `agent/tracer.py` |
 
 ## 运行
 
-```powershell
-python -m eval.metrics
-python -m eval.ablation
-python -m eval.judge
+使用项目环境与 `.env`：
+
+```bash
+conda activate research
+set -a && source .env && set +a
 ```
 
-当前指标样本包含成功和失败轨迹，可验证评测代码是否正常。现有消融每组仅 2 条人工
-样本，结果不能视为真实模型的统计证据。正式报告应改为：
+离线管线 smoke test（FakeBackend 只验证 harness，不代表真实能力）：
 
-- 固定任务集、模型、温度、工具和最大轮次。
-- 每组至少 10 条真实 Agent 轨迹，最好多次运行。
-- 只改变一个变量，例如 Todo、compaction、记忆或错误恢复。
-- 报告成功率、平均步数、token/成本、均值与方差。
-- 保存原始 trace，并解释失败类型而不是只给总分。
+```bash
+python -m eval.runner --backend fake --tasks read-config --repeat 1 --no-judge
+python -m eval.metrics --records eval/runs/<run>/records.jsonl
+```
+
+真实只读评估（需要 `DEEPSEEK_API_KEY`）：
+
+```bash
+python -m eval.runner --backend real \
+  --tasks read-config,domain-scan-todos,audit-experiment-code \
+  --repeat 1 --max-turns 8 --max-steps 20 --judge
+```
+
+真实消融：
+
+```bash
+python -m eval.ablation --backend real --repeat 3 --tasks read-config,domain-scan-todos --judge
+```
+
+## 设计原则
+
+- 先记录，后评估：`runner.py` 先保存真实 `records.jsonl`，`metrics.py` 和 `judge.py` 再消费这些记录。
+- 默认只读：默认任务集不执行安装、下载、训练或真实 setup 脚本；执行类任务不能只凭“出现 bash”判成功。
+- judge 看证据：LLM-as-judge 同时看任务、rubric、最终答案和轨迹摘要；没有读取/扫描/执行证据就应扣分。
+- 报告多维指标：程序化成功率、judge 通过率、混合成功率、步数、token、工具成功率、权限拦截率和安全违规，而不是只给一个总分。
+
+正式报告建议每组多次运行，固定任务集、模型、温度、工具和最大轮次，只改变一个变量，并保存原始 records/judgments 供人工抽查。

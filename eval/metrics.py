@@ -1,35 +1,29 @@
-"""Day 3 · 成功率与效率指标（讲义 §8：报告一组指标，而非一个数字）。
+"""评估指标：程序化成功率、轨迹效率、tool-call 格式、judge 聚合。
 
-四项指标：
-  - success_rate：对不对（复用 tasks.py 的 check 函数）
-  - step_count / token_count：贵不贵（效率维度）
-  - json_valid_rate：工具调用格式稳不稳
-
-为在没有真 agent 的情况下就能跑，内置一批样本轨迹记录。
-D4 起把真 agent 的轨迹换进来即可，指标函数一行不用改。
+正式评估应读取 eval.runner 生成的 records.jsonl；SAMPLE_RECORDS 只用于离线 demo。
 """
 from __future__ import annotations
+
+import argparse
 import json
 import re
+from pathlib import Path
+from statistics import mean
 from typing import Any
 
-# 匹配完整 <tool_call>{...}</tool_call>
+from eval.trajectory import load_jsonl, write_json
+
 TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
-# 检测是否有 <tool_call> 开头（包括因截断缺少 </tool_call> 的情况）
 HAS_TOOL_CALL_RE = re.compile(r"<tool_call>", re.DOTALL)
-# 从 <tool_call> 后尽量提取一段 JSON 候选串（到 </tool_call> 或行末）
 FALLBACK_JSON_RE = re.compile(r"<tool_call>\s*(\{.*)", re.DOTALL)
 
-# ---- 样本轨迹记录 ----
-# 一条记录 = 一次任务运行留下的轨迹。steps 里每步含：
-#   tool_calls: 模型这步请求的工具调用（结构化列表）
-#   raw: 原始文本（含 <tool_call> 标记）
-#   prompt_tokens / completion_tokens: 该步的 token 计数
+
 SAMPLE_RECORDS: list[dict[str, Any]] = [
     {
         "task": "read-config",
         "steps": [
             {"tool_calls": [{"name": "read", "arguments": {"path": "config.json"}}],
+             "tool_results": [{"name": "read", "observation": '{"timeout": 30}', "ok": True}],
              "raw": '<tool_call>{"name":"read","arguments":{"path":"config.json"}}</tool_call>',
              "prompt_tokens": 310, "completion_tokens": 22},
         ],
@@ -38,157 +32,291 @@ SAMPLE_RECORDS: list[dict[str, Any]] = [
     {
         "task": "list-dir",
         "steps": [
-            {"tool_calls": [{"name": "bash", "arguments": {"command": "ls"}}],
-             "raw": '<tool_call>{"name":"bash","arguments":{"command":"ls"}}</tool_call>',
+            {"tool_calls": [{"name": "glob", "arguments": {"pattern": "*", "path": "."}}],
+             "tool_results": [{"name": "glob", "observation": "README.md\nagent\neval", "ok": True}],
+             "raw": '<tool_call>{"name":"glob","arguments":{"pattern":"*","path":"."}}</tool_call>',
              "prompt_tokens": 290, "completion_tokens": 18},
         ],
-        "final": "当前目录有：main.py config.json README.md",
+        "final": "当前目录有：README.md、agent、eval。",
     },
     {
-        "task": "read-config",          # 一条"失败/低质量"样本：JSON 被截断，且没报出值
+        "task": "read-config",
         "steps": [
             {"tool_calls": [],
-             "raw": '<tool_call>{"name":"read","arguments":{"path":',   # 坏 JSON
+             "raw": '<tool_call>{"name":"read","arguments":{"path":',
              "prompt_tokens": 305, "completion_tokens": 12},
             {"tool_calls": [], "raw": "我不确定 timeout 的值。",
              "prompt_tokens": 340, "completion_tokens": 15},
         ],
         "final": "我不确定 timeout 的值。",
     },
-    {
-        "task": "domain-scan-todos",
-        "steps": [
-            {"tool_calls": [{"name": "grep", "arguments": {"pattern": "TODO", "path": "."}}],
-             "raw": '<tool_call>{"name":"grep","arguments":{"pattern":"TODO","path":"."}}</tool_call>',
-             "prompt_tokens": 350, "completion_tokens": 25},
-        ],
-        "final": "扫描结果：\n- TODO[Day3] 完善任务判据\n- TODO[Day4] 实现主循环\n- TODO[Day5] 上下文压缩",
-    },
-    {
-        "task": "run-bash-script",
-        "steps": [
-            {"tool_calls": [{"name": "bash", "arguments": {"command": "bash scripts/setup.sh"}}],
-             "raw": '<tool_call>{"name":"bash","arguments":{"command":"bash scripts/setup.sh"}}</tool_call>',
-             "prompt_tokens": 320, "completion_tokens": 21},
-        ],
-        "final": "已运行 scripts/setup.sh，脚本执行完毕，依赖安装成功。",
-    },
-    {
-        "task": "audit-experiment-code",
-        "steps": [
-            {"tool_calls": [{"name": "glob", "arguments": {"pattern": "*.py"}}],
-             "raw": '<tool_call>{"name":"glob","arguments":{"pattern":"*.py"}}</tool_call>',
-             "prompt_tokens": 420, "completion_tokens": 18},
-            {"tool_calls": [{"name": "grep", "arguments": {"pattern": "seed|random|deterministic", "path": "."}}],
-             "raw": '<tool_call>{"name":"grep","arguments":{"pattern":"seed|random|deterministic","path":"."}}</tool_call>',
-             "prompt_tokens": 1100, "completion_tokens": 25},
-            {"tool_calls": [{"name": "grep", "arguments": {"pattern": "/home/|/data/|/mnt/|C:\\\\\\\\", "path": "."}}],
-             "raw": '<tool_call>{"name":"grep","arguments":{"pattern":"/home/|/data/|/mnt/|C:\\\\\\\\","path":"."}}</tool_call>',
-             "prompt_tokens": 1600, "completion_tokens": 26},
-            {"tool_calls": [{"name": "read", "arguments": {"path": "requirements.txt"}}],
-             "raw": '<tool_call>{"name":"read","arguments":{"path":"requirements.txt"}}</tool_call>',
-             "prompt_tokens": 2100, "completion_tokens": 19},
-            {"tool_calls": [{"name": "write", "arguments": {"path": "experiment-audit.md"}}],
-             "raw": '<tool_call>{"name":"write","arguments":{"path":"experiment-audit.md"}}</tool_call>',
-             "prompt_tokens": 2600, "completion_tokens": 120},
-        ],
-        "final": (
-            "# 实验代码审计报告\n\n"
-            "## 可复现性检查\n"
-            "| 维度 | 判定 | 说明 |\n|------|------|------|\n"
-            "| 随机种子 | ⚠️ | agent/loop.py:34 未固定 torch 随机种子，建议在 train() 开头添加 torch.manual_seed(42) |\n"
-            "| 硬编码路径 | ❌ | tools/more_tools.py:98 使用 /home/author/data，应改为通过 --data-dir 参数传入 |\n"
-            "| 依赖声明 | ✅ | requirements.txt 包含全部依赖，版本已锁定 |\n"
-            "| 评估指标 | ✅ | eval/metrics.py:81-89 正确实现了 success_rate |\n\n"
-            "## 严重问题\n"
-            "- **tools/more_tools.py:98**：`/home/author/data` 是硬编码路径，其他机器无法复现。建议改为 `Path(args.data_dir) / 'dataset.csv'` 或通过环境变量 `DATA_DIR` 配置。\n"
-            "- **agent/loop.py:34**：缺少 torch.manual_seed() 调用，不同运行结果不可复现。\n\n"
-            "## 总结\n"
-            "- 可复现性评分：4/6 项通过\n"
-            "- 建议在复现前修复：硬编码路径（tools/more_tools.py:98）、随机种子（agent/loop.py:34）"
-        ),
-    },
 ]
 
 
-# ---- 指标函数 ----
+def check_results(tasks: list, records: list[dict]) -> list[dict[str, Any]]:
+    """逐条运行 task.check，返回可解释程序化判据结果。"""
+    from eval.tasks import as_check_result
+
+    by_name = {t.name: t for t in tasks}
+    results = []
+    for record in records:
+        task = by_name.get(record.get("task"))
+        if not task:
+            results.append({
+                "task": record.get("task"),
+                "run_id": record.get("run_id"),
+                "passed": False,
+                "reasons": ["未知任务"],
+                "evidence": {},
+            })
+            continue
+        try:
+            result = as_check_result(task.check(record))
+            results.append({
+                "task": record.get("task"),
+                "run_id": record.get("run_id"),
+                "passed": result.passed,
+                "reasons": result.reasons,
+                "evidence": result.evidence,
+                "score": result.score,
+            })
+        except Exception as error:  # noqa: BLE001
+            results.append({
+                "task": record.get("task"),
+                "run_id": record.get("run_id"),
+                "passed": False,
+                "reasons": [f"check 抛异常：{error}"],
+                "evidence": {},
+            })
+    return results
+
 
 def success_rate(tasks: list, records: list[dict]) -> float:
-    """对每条 (task, trajectory) 记录跑 task.check，返回成功比例。"""
-    by_name = {t.name: t for t in tasks}
-    ok = 0
-    for r in records:
-        task = by_name.get(r["task"])
-        if task and task.check(r):      # 复用步骤 1 的成功判据
-            ok += 1
-    return ok / max(len(records), 1)
+    results = check_results(tasks, records)
+    return _rate(r.get("passed") for r in results)
 
 
 def step_count(record: dict) -> int:
-    """单条轨迹的步数。"""
-    return len(record["steps"])
+    return len(record.get("steps", []))
 
 
 def token_count(record: dict) -> int:
-    """单条轨迹的总 token（prompt + completion）。"""
-    return sum(s.get("prompt_tokens", 0) + s.get("completion_tokens", 0)
-               for s in record["steps"])
+    summary = record.get("summary", {})
+    if summary.get("tokens") is not None:
+        return int(summary.get("tokens") or 0)
+    return sum(
+        (s.get("prompt_tokens", 0) or 0) + (s.get("completion_tokens", 0) or 0)
+        for s in record.get("steps", [])
+    )
+
+
+def tool_calls(record: dict) -> list[dict[str, Any]]:
+    return [tc for step in record.get("steps", []) for tc in step.get("tool_calls", [])]
+
+
+def tool_results(record: dict) -> list[dict[str, Any]]:
+    return [tr for step in record.get("steps", []) for tr in step.get("tool_results", [])]
 
 
 def json_valid_rate(records: list[dict]) -> float:
-    """从每步的 raw 里提取 <tool_call> JSON 并校验合法性。
-
-    只计入含 <tool_call> 标记的步（这步确实想调工具），纯文本步不参与计算。
-    对于截断/缺标签等边缘情况也尽量提取 JSON 候选串尝试解析。
-    """
+    """工具调用参数 JSON 合法率；兼容旧 raw 文本和新 structured tool_calls。"""
     total, ok = 0, 0
-    for r in records:
-        for s in r["steps"]:
-            raw = s.get("raw", "")
-            # 这步是否出现了 <tool_call>（不管是否完整）
+    for record in records:
+        for step in record.get("steps", []):
+            structured = step.get("tool_calls") or []
+            if structured:
+                for call in structured:
+                    total += 1
+                    if call.get("arguments_parse_ok", isinstance(call.get("arguments"), dict)):
+                        ok += 1
+                continue
+
+            raw = step.get("raw", "")
             if not HAS_TOOL_CALL_RE.search(raw):
-                continue                # 纯文本步，无工具调用意图
+                continue
             total += 1
-            # 优先用完整匹配提取 JSON
-            m = TOOL_CALL_RE.search(raw)
-            if not m:
-                # 回退：从 <tool_call> 后尽量截取（截断/缺闭合标签）
-                m = FALLBACK_JSON_RE.search(raw)
-            if not m:
-                continue                # 无法提取任何 JSON 候选串
-            candidate = m.group(1)
-            # 尝试补全截断的 JSON：补上缺失的闭合括号
-            if not candidate.endswith("}"):
-                # 简单补全：先尝试补 }}
-                candidate = _try_mend_json(candidate)
+            candidate = _extract_tool_json(raw)
+            if candidate is None:
+                continue
             try:
                 json.loads(candidate)
                 ok += 1
             except json.JSONDecodeError:
-                pass                     # 坏 JSON：计入分母、不计入分子
+                pass
     return ok / max(total, 1)
 
 
+def tool_success_rate(records: list[dict]) -> float:
+    results = [tr for record in records for tr in tool_results(record)]
+    return _rate(_tool_result_ok(tr) for tr in results)
+
+
+def permission_block_rate(records: list[dict]) -> float:
+    results = [tr for record in records for tr in tool_results(record)]
+    return _rate(bool(tr.get("permission_blocked")) for tr in results)
+
+
+def forbidden_tool_rate(tasks: list, records: list[dict]) -> float:
+    by_name = {t.name: t for t in tasks}
+    hits = []
+    for record in records:
+        task = by_name.get(record.get("task"))
+        forbidden = set(getattr(task, "forbidden_tools", ()) if task else ())
+        used = {tc.get("name") for tc in tool_calls(record)}
+        hits.append(bool(forbidden & used))
+    return _rate(hits)
+
+
+def required_tool_coverage(tasks: list, records: list[dict]) -> float:
+    by_name = {t.name: t for t in tasks}
+    covered = []
+    for record in records:
+        task = by_name.get(record.get("task"))
+        required = set(getattr(task, "required_tools", ()) if task else ())
+        if not required:
+            continue
+        used = {tc.get("name") for tc in tool_calls(record)}
+        covered.append(required.issubset(used))
+    return _rate(covered)
+
+
+def judge_score_mean(judgments: list[dict]) -> float | None:
+    scores = [j.get("score") for j in judgments if isinstance(j.get("score"), int)]
+    return mean(scores) if scores else None
+
+
+def judge_pass_rate(judgments: list[dict]) -> float:
+    return _rate(bool(j.get("passed")) for j in judgments)
+
+
+def hybrid_success_rate(tasks: list, records: list[dict], judgments: list[dict]) -> float:
+    checks = check_results(tasks, records)
+    judge_by_run = {j.get("run_id"): j for j in judgments}
+    values = []
+    for check, record in zip(checks, records):
+        judgment = judge_by_run.get(record.get("run_id"))
+        judge_ok = True if judgment is None else bool(judgment.get("passed"))
+        safety_ok = not _has_safety_violation(judgment) and not _record_has_forbidden(tasks, record)
+        values.append(bool(check.get("passed")) and judge_ok and safety_ok)
+    return _rate(values)
+
+
+def aggregate_summary(tasks: list, records: list[dict], judgments: list[dict] | None = None,
+                      price_per_1k: float = 0.001) -> dict[str, Any]:
+    judgments = judgments or []
+    total_tokens = sum(token_count(r) for r in records)
+    summary = {
+        "records": len(records),
+        "programmatic_success_rate": success_rate(tasks, records),
+        "avg_steps": mean([step_count(r) for r in records]) if records else 0.0,
+        "avg_tokens": mean([token_count(r) for r in records]) if records else 0.0,
+        "json_valid_rate": json_valid_rate(records),
+        "tool_success_rate": tool_success_rate(records),
+        "permission_block_rate": permission_block_rate(records),
+        "forbidden_tool_rate": forbidden_tool_rate(tasks, records),
+        "required_tool_coverage": required_tool_coverage(tasks, records),
+        "total_tokens": total_tokens,
+        "estimated_cost": total_tokens / 1000 * price_per_1k,
+    }
+    if judgments:
+        summary.update({
+            "judgments": len(judgments),
+            "judge_score_mean": judge_score_mean(judgments),
+            "judge_pass_rate": judge_pass_rate(judgments),
+            "hybrid_success_rate": hybrid_success_rate(tasks, records, judgments),
+            "judge_parse_ok_rate": _rate(bool(j.get("parse_ok")) for j in judgments),
+        })
+    return summary
+
+
+def print_summary(summary: dict[str, Any]) -> None:
+    print("=== eval 指标报告 ===")
+    labels = [
+        ("records", "轨迹条数"),
+        ("programmatic_success_rate", "程序化成功率"),
+        ("judge_pass_rate", "judge 通过率"),
+        ("judge_score_mean", "judge 平均分"),
+        ("hybrid_success_rate", "混合成功率"),
+        ("avg_steps", "平均步数"),
+        ("avg_tokens", "平均 token"),
+        ("json_valid_rate", "工具参数 JSON 合法率"),
+        ("tool_success_rate", "工具成功率"),
+        ("permission_block_rate", "权限拦截率"),
+        ("forbidden_tool_rate", "禁用工具触发率"),
+        ("required_tool_coverage", "必需工具覆盖率"),
+        ("estimated_cost", "估算成本($)"),
+    ]
+    for key, label in labels:
+        if key not in summary or summary[key] is None:
+            continue
+        value = summary[key]
+        if isinstance(value, float):
+            print(f"{label:18s}: {value:.3f}")
+        else:
+            print(f"{label:18s}: {value}")
+
+
+def _extract_tool_json(raw: str) -> str | None:
+    match = TOOL_CALL_RE.search(raw) or FALLBACK_JSON_RE.search(raw)
+    if not match:
+        return None
+    candidate = match.group(1)
+    if not candidate.endswith("}"):
+        candidate = _try_mend_json(candidate)
+    return candidate
+
+
 def _try_mend_json(s: str) -> str:
-    """尝试修补截断的 JSON：统计未闭合的 { 和 [，补上对应闭合符。"""
     depth_brace = s.count("{") - s.count("}")
     depth_bracket = s.count("[") - s.count("]")
-    # 去掉尾部逗号（JSON 不允许 trailing comma）
     s = s.rstrip(",\n\r ")
     s += "}" * max(depth_brace, 0)
     s += "]" * max(depth_bracket, 0)
     return s
 
 
-# ---- 驱动（可直接 python -m eval.metrics 运行）----
-if __name__ == "__main__":
+def _tool_result_ok(result: dict[str, Any]) -> bool:
+    if result.get("ok") is not None:
+        return bool(result.get("ok"))
+    obs = str(result.get("observation", ""))
+    if result.get("returncode") not in (None, 0):
+        return False
+    return not any(marker in obs for marker in ("[权限层]", "[沙箱] 拒绝", "错误：", "Traceback"))
+
+
+def _record_has_forbidden(tasks: list, record: dict[str, Any]) -> bool:
+    task = next((t for t in tasks if t.name == record.get("task")), None)
+    forbidden = set(getattr(task, "forbidden_tools", ()) if task else ())
+    used = {tc.get("name") for tc in tool_calls(record)}
+    return bool(forbidden & used)
+
+
+def _has_safety_violation(judgment: dict | None) -> bool:
+    return bool(judgment and judgment.get("safety_violations"))
+
+
+def _rate(values) -> float:
+    vals = list(values)
+    return sum(1 for v in vals if v) / max(len(vals), 1)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="汇总 eval records/judgments 指标")
+    parser.add_argument("--records", help="eval.runner 生成的 records.jsonl；不传则使用 SAMPLE_RECORDS demo")
+    parser.add_argument("--judgments", help="可选 judgments.jsonl")
+    parser.add_argument("--summary-out", help="可选 summary.json 输出路径")
+    args = parser.parse_args(argv)
+
     from eval.tasks import SAMPLE_TASKS
 
-    recs = SAMPLE_RECORDS
-    print("=== Day 3 指标报告（样本轨迹）===")
-    print(f"成功率        : {success_rate(SAMPLE_TASKS, recs):.2f}")
-    print(f"平均步数      : {sum(step_count(r) for r in recs) / len(recs):.1f}")
-    print(f"平均 token    : {sum(token_count(r) for r in recs) / len(recs):.0f}")
-    print(f"JSON 合法率   : {json_valid_rate(recs):.2f}")
-    print()
-    print('（讲义 §8：同时看"对不对"和"贵不贵"两类维度，别只报一个数字）')
+    records = load_jsonl(args.records) if args.records else SAMPLE_RECORDS
+    judgments = load_jsonl(args.judgments) if args.judgments else []
+    summary = aggregate_summary(SAMPLE_TASKS, records, judgments)
+    print_summary(summary)
+    if args.summary_out:
+        write_json(Path(args.summary_out), summary)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -133,11 +133,23 @@ class DeepSeekBackend:
         tool_calls = []
         for tc in (msg.get("tool_calls") or []):
             fn = tc.get("function", {})
+            raw_arguments = fn.get("arguments") or "{}"
+            parse_ok = True
+            parse_error = None
             try:
-                args = json.loads(fn.get("arguments") or "{}")
-            except json.JSONDecodeError:
+                args = json.loads(raw_arguments)
+            except json.JSONDecodeError as error:
                 args = {}
-            tool_calls.append({"id": tc.get("id"), "name": fn.get("name"), "arguments": args})
+                parse_ok = False
+                parse_error = str(error)
+            tool_calls.append({
+                "id": tc.get("id"),
+                "name": fn.get("name"),
+                "arguments": args,
+                "raw_arguments": raw_arguments,
+                "arguments_parse_ok": parse_ok,
+                "arguments_parse_error": parse_error,
+            })
         result: dict[str, Any] = {"role": "assistant", "content": msg.get("content") or "",
                                    "tool_calls": tool_calls}
         if usage:

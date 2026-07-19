@@ -111,7 +111,8 @@ class AgentLoop:
                  workdir: str | Path = ".", auto_approve: bool = False,
                  on_event: Callable[[dict[str, Any]], None] | None = None,
                  confirm_hook: Callable[[str, dict[str, Any]], bool] | None = None,
-                 tracer: Tracer | None = None):
+                 tracer: Tracer | None = None,
+                 trajectory_sink: Callable[[dict[str, Any]], None] | None = None):
         self.backend = backend
         self.registry = registry
         self.system_prompt = system_prompt
@@ -120,6 +121,7 @@ class AgentLoop:
         self.workdir = Path(workdir)
         self.auto_approve = auto_approve    # True 时放行 confirm 级判定
         self.on_event = on_event            # 交互界面渲染工具调用过程用；None 时零行为变化
+        self.trajectory_sink = trajectory_sink  # eval harness 收集完整轨迹用；None 时零行为变化
         self.confirm_hook = confirm_hook    # 交互界面真实询问用户 y/N；None 时 confirm 级一律拦截
         self.tracer = tracer or Tracer()    # Day 9：可观测性（无 session 时用内存版）
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
@@ -143,6 +145,11 @@ class AgentLoop:
     def _emit(self, event: dict[str, Any]) -> None:
         if self.on_event is not None:
             self.on_event(event)
+
+    def _trace_eval(self, event: dict[str, Any]) -> None:
+        """把完整运行事件交给 eval harness；默认关闭，不影响正常 CLI/REPL。"""
+        if self.trajectory_sink is not None:
+            self.trajectory_sink(event)
 
     def _chat_with_retry(self, messages: list[dict[str, Any]], max_tries: int = 3) -> dict[str, Any]:
         """调用模型；只对网络、超时、429 和 5xx 做有限指数退避重试。"""
@@ -342,6 +349,13 @@ class AgentLoop:
         self.task_scopes = self._detect_task_scopes(user_input)
         self.readonly_downgrade = self._requests_full_experiment(user_input)
         self.messages.append({"role": "user", "content": user_input})
+        self._trace_eval({
+            "type": "task_start",
+            "input": user_input,
+            "max_turns": self.max_turns,
+            "max_steps": self.max_steps,
+            "readonly_downgrade": self.readonly_downgrade,
+        })
 
         # 如果上一轮任务已全部完成，清空遗留的 TODO，避免 stop_reason()
         # 在新一轮对话的第一轮迭代就误判为"任务完成"。
@@ -356,6 +370,7 @@ class AgentLoop:
             # --- Day 8 步骤 5：步数预算检查 ---
             reason = stop_reason(self.max_steps, step_count)
             if reason:
+                self._trace_eval({"type": "final", "status": "max_steps", "content": reason, "turn": turn})
                 return reason
 
             # --- Day 8 步骤 5：卡死检测 ---
@@ -386,7 +401,17 @@ class AgentLoop:
                         completion_tokens=usage.get("completion_tokens"),
                     )
             except Exception as e:  # noqa: BLE001
-                return f"错误：后端调用失败：{e}"
+                error_msg = f"错误：后端调用失败：{e}"
+                self._trace_eval({"type": "final", "status": "backend_error", "content": error_msg, "turn": turn, "error": str(e)})
+                return error_msg
+
+            self._trace_eval({
+                "type": "llm",
+                "turn": turn,
+                "content": assistant.get("content", ""),
+                "tool_calls": assistant.get("tool_calls", []),
+                "usage": usage,
+            })
 
             self.messages.append({"role": "assistant",
                                   "content": assistant.get("content", ""),
@@ -406,8 +431,12 @@ class AgentLoop:
                                 for it in remaining
                             )
                         )
-                        return (assistant.get("content", "") or "") + reminder
-                return assistant.get("content", "")
+                        final_text = (assistant.get("content", "") or "") + reminder
+                        self._trace_eval({"type": "final", "status": "completed_with_reminder", "content": final_text, "turn": turn})
+                        return final_text
+                final_text = assistant.get("content", "")
+                self._trace_eval({"type": "final", "status": "completed", "content": final_text, "turn": turn})
+                return final_text
 
             if assistant.get("content"):
                 self._emit({"type": "assistant_text", "content": assistant["content"]})
@@ -422,6 +451,13 @@ class AgentLoop:
                     arguments = {}
 
                 self._emit({"type": "tool_call", "name": name, "arguments": arguments})
+                self._trace_eval({
+                    "type": "tool_call",
+                    "turn": turn,
+                    "tool_call_id": call.get("id") or name,
+                    "name": name,
+                    "arguments": arguments,
+                })
 
                 # Day 8 步骤 5：记录动作供卡死检测
                 self.progress_tracker.record_action(name, arguments)
@@ -442,7 +478,19 @@ class AgentLoop:
                 if reflection:
                     obs = str(obs) + "\n\n" + reflection
 
-                self._emit({"type": "tool_result", "name": name, "observation": str(obs)})
+                observation = str(obs)
+                self._emit({"type": "tool_result", "name": name, "observation": observation})
+                returncode_match = re.search(r"\[returncode=(\d+)\]", observation)
+                self._trace_eval({
+                    "type": "tool_result",
+                    "turn": turn,
+                    "tool_call_id": call.get("id") or name,
+                    "name": name,
+                    "observation": observation,
+                    "ok": not observation.startswith("错误：") and "[权限层]" not in observation and "[沙箱] 拒绝" not in observation,
+                    "permission_blocked": "[权限层]" in observation,
+                    "returncode": int(returncode_match.group(1)) if returncode_match else (0 if name == "bash" else None),
+                })
 
                 # 只有实际创建/更新成功才算推进；被拒绝的嵌套 todo_write 不能
                 # 重置卡死计数，否则模型可反复建小清单直到耗尽轮次。
@@ -462,7 +510,9 @@ class AgentLoop:
             else:
                 self.progress_tracker.mark_step_without_progress()
 
-        return "[达到最大轮数上限，未完成任务]"
+        final_text = "[达到最大轮数上限，未完成任务]"
+        self._trace_eval({"type": "final", "status": "max_turns", "content": final_text, "turn": self.max_turns})
+        return final_text
 
     def run(self, user_task: str | list[dict[str, Any]]) -> str:
         """单次任务的薄封装，等价于 send()；供一次性 CLI 调用和 eval/redteam 脚本使用。"""

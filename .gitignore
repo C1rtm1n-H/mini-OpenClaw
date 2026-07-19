@@ -35,5 +35,11 @@ build/
 # Session traces (Day 9)
 session/
 
+# Local demo artifacts
+demo/
+
+# Eval run outputs
+eval/runs/
+
 # Claude
 .claude/

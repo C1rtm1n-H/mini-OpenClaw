@@ -1,6 +1,0 @@
-# 实验依赖 —— 缺陷：全部缺少版本约束（D12）
-torch
-torchvision
-numpy
-Pillow
-# D6/D10: scikit-learn 在 train.py 和 evaluate.py 中 import，但未列出
