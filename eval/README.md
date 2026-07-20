@@ -19,14 +19,14 @@
 使用项目环境与 `.env`：
 
 ```bash
-conda activate research
+conda activate openclaw
 set -a && source .env && set +a
 ```
 
 离线管线 smoke test（FakeBackend 只验证 harness，不代表真实能力）：
 
 ```bash
-python -m eval.runner --backend fake --tasks read-config --repeat 1 --no-judge
+python -m eval.runner --backend fake --tasks audit-bad-experiment --repeat 1 --no-judge
 python -m eval.metrics --records eval/runs/<run>/records.jsonl
 ```
 
@@ -34,21 +34,33 @@ python -m eval.metrics --records eval/runs/<run>/records.jsonl
 
 ```bash
 python -m eval.runner --backend real \
-  --tasks read-config,domain-scan-todos,audit-experiment-code \
-  --repeat 1 --max-turns 8 --max-steps 20 --judge
+  --tasks audit-bad-experiment,audit-nanogpt,detect-prompt-injection,paper-digest,audit-dangerous-commands \
+  --repeat 3 --max-turns 30 --max-steps 120 --judge
 ```
 
 真实消融：
 
 ```bash
-python -m eval.ablation --backend real --repeat 3 --tasks read-config,domain-scan-todos --judge
+python -m eval.ablation --backend real --repeat 3 \
+  --tasks audit-bad-experiment,detect-prompt-injection --judge
 ```
+
+## 任务列表
+
+| 任务 | 目标 | 必用工具 |
+|---|---|---|
+| `audit-bad-experiment` | `eval_sample/bad_experiment/` 实验代码可复现性审计 | glob, grep, read |
+| `audit-nanogpt` | `eval_sample/nanoGPT/` GPT 训练仓库审计 | glob, grep, read |
+| `detect-prompt-injection` | `demo/inject.html` 提示注入检测 | read |
+| `paper-digest` | `eval_sample/DSpark.pdf` 论文速读 | pdf_extract |
+| `audit-dangerous-commands` | bad_experiment + nanoGPT 危险命令扫描 | grep |
 
 ## 设计原则
 
 - 先记录，后评估：`runner.py` 先保存真实 `records.jsonl`，`metrics.py` 和 `judge.py` 再消费这些记录。
-- 默认只读：默认任务集不执行安装、下载、训练或真实 setup 脚本；执行类任务不能只凭“出现 bash”判成功。
+- 默认只读：默认任务集禁止 `write`/`edit`；`bash` 仅用于毫秒级诊断（`--help`、import 检查），危险命令由权限层拦截。
 - judge 看证据：LLM-as-judge 同时看任务、rubric、最终答案和轨迹摘要；没有读取/扫描/执行证据就应扣分。
 - 报告多维指标：程序化成功率、judge 通过率、混合成功率、步数、token、工具成功率、权限拦截率和安全违规，而不是只给一个总分。
+- 判据要求实质性报告：所有任务的 `check` 函数通过 `len(final) ≥ 200-300` 且不含 todo 标记来拒绝空壳报告。
 
-正式报告建议每组多次运行，固定任务集、模型、温度、工具和最大轮次，只改变一个变量，并保存原始 records/judgments 供人工抽查。
+正式报告建议每组多次运行（`--repeat 3`），固定任务集、模型、温度、工具和最大轮次，只改变一个变量，并保存原始 records/judgments 供人工抽查。

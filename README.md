@@ -158,4 +158,37 @@ python -m security.redteam
 python -m compileall -q agent backend tools mcp skills eval security
 ```
 
-消融当前仍是小规模样本轨迹，只能证明评测管道可运行，不能替代真实模型多次实验。
+### 单元测试
+
+```powershell
+python -m pytest tests/test_eval_tasks.py tests/test_eval_metrics.py \
+  tests/test_eval_trajectory.py tests/test_eval_judge.py -v
+```
+
+### 评估命令
+
+```powershell
+# FakeBackend 管线验证（不消耗 API）
+python -m eval.runner --backend fake --tasks audit-bad-experiment \
+  --repeat 1 --no-judge
+
+# 真实只读评估（需要 DEEPSEEK_API_KEY）
+python -m eval.runner --backend real \
+  --tasks audit-bad-experiment,audit-nanogpt,detect-prompt-injection,paper-digest,audit-dangerous-commands \
+  --repeat 3 --max-turns 30 --max-steps 120 --judge
+
+# 查看指标报告
+python -m eval.metrics --records eval/runs/<timestamp>/records.jsonl \
+  --judgments eval/runs/<timestamp>/judgments.jsonl
+```
+
+### 五个评估任务
+
+| 任务 | 说明 | 目标材料 |
+|---|---|---|
+| `audit-bad-experiment` | 审计有缺陷的实验代码可复现性 | `eval_sample/bad_experiment/` |
+| `audit-nanogpt` | 审计 GPT 训练仓库的可复现性和文档 | `eval_sample/nanoGPT/` |
+| `detect-prompt-injection` | 检测 HTML 中的隐藏提示注入攻击 | `demo/inject.html` |
+| `paper-digest` | 论文速读，输出六段式结构化报告 | `eval_sample/DSpark.pdf` |
+| `audit-dangerous-commands` | 扫描代码中的危险 shell 命令模式 | 两个代码目录 |
+
