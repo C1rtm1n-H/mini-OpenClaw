@@ -34,6 +34,13 @@ conda activate openclaw
 python -m pip install -r requirements.txt
 ```
 
+开发、评测或提交前运行测试时安装：
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
 配置后端：
 
 ```powershell
@@ -152,7 +159,7 @@ python -m agent.cli --max-turns 100 --max-steps 160
 ```powershell
 python -m agent.cli --selfcheck
 python -m agent.cli --selfcheck --mcp-command "python -m mcp.calc_server"
-python -m eval.metrics
+python -m eval.metrics --demo  # 仅验证指标管线；正式评估必须传 --records
 python -m eval.ablation
 python -m security.redteam
 python -m compileall -q agent backend tools mcp skills eval security

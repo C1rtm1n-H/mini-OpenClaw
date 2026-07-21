@@ -481,15 +481,25 @@ class AgentLoop:
                 observation = str(obs)
                 self._emit({"type": "tool_result", "name": name, "observation": observation})
                 returncode_match = re.search(r"\[returncode=(\d+)\]", observation)
+                returncode = int(returncode_match.group(1)) if returncode_match else (0 if name == "bash" else None)
+                tool_ok = (
+                    returncode in (None, 0)
+                    and not observation.startswith("错误：")
+                    and "[权限层]" not in observation
+                    and "[沙箱] 拒绝" not in observation
+                )
+                # registry 会把部分工具异常转换成 observation 字符串；同步修正 span，
+                # 避免“函数正常返回”被误记成“工具执行成功”。
+                self.tracer.update_last("tool", ok=tool_ok, returncode=returncode)
                 self._trace_eval({
                     "type": "tool_result",
                     "turn": turn,
                     "tool_call_id": call.get("id") or name,
                     "name": name,
                     "observation": observation,
-                    "ok": not observation.startswith("错误：") and "[权限层]" not in observation and "[沙箱] 拒绝" not in observation,
+                    "ok": tool_ok,
                     "permission_blocked": "[权限层]" in observation,
-                    "returncode": int(returncode_match.group(1)) if returncode_match else (0 if name == "bash" else None),
+                    "returncode": returncode,
                 })
 
                 # 只有实际创建/更新成功才算推进；被拒绝的嵌套 todo_write 不能

@@ -9,9 +9,10 @@
 ## 运行方式
 
 ```bash
-conda activate research
+conda activate openclaw
 set -a && source .env && set +a
-python -m eval.ablation --backend real --repeat 3 --tasks read-config,domain-scan-todos --judge
+python -m eval.ablation --backend real --repeat 3 \
+  --tasks audit-bad-experiment,detect-prompt-injection --judge
 ```
 
 输出会写入：

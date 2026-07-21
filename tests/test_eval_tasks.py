@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from eval.tasks import DEFAULT_TASKS, SAMPLE_TASKS, get_task
+from eval.ablation import DEFAULT_ABLATION_TASKS
+from eval.tasks import DEFAULT_TASKS, SAMPLE_TASKS, get_task, select_tasks
 
 
 class EvalTasksTest(unittest.TestCase):
@@ -29,6 +30,11 @@ class EvalTasksTest(unittest.TestCase):
             self.assertIn(expected, names,
                           f"Expected task '{expected}' not found")
 
+    def test_ablation_defaults_only_reference_current_readonly_tasks(self):
+        names = DEFAULT_ABLATION_TASKS.split(",")
+        selected = select_tasks(names, readonly_only=True)
+        self.assertEqual([task.name for task in selected], names)
+
     # ---- audit-bad-experiment ----
 
     def test_bad_experiment_passes_with_full_audit(self):
@@ -42,8 +48,8 @@ class EvalTasksTest(unittest.TestCase):
                 {"name": "read", "arguments": {"path": "eval_sample/bad_experiment/train.py"}},
             ], "tool_results": [
                 {"name": "glob", "observation": "train.py\nevaluate.py\nconfig.yaml"},
-                {"name": "grep", "observation": "train.py:32:cuda:0\ntrain.py:85:random.seed"},
-                {"name": "read", "observation": "DEVICE = 'cuda:0'\nDATA_DIR = '/home/user/data/'"},
+                {"name": "grep", "observation": "train.py:31:DATA_DIR='/home/user/data/'\ntrain.py:32:cuda:0\ntrain.py:85:random.seed"},
+                {"name": "read", "observation": "evaluate.py:20:model(images)\nDEVICE = 'cuda:0'\nDATA_DIR = '/home/user/data/'"},
             ]}],
             "final": "发现4个缺陷：1) train.py:85 未设置 random seed 随机种子 2) train.py:31 硬编码路径 /home/user/data/ "
                      "3) train.py:32 硬编码 cuda:0 4) evaluate.py:20 缺少 model.eval()/torch.no_grad()。"
@@ -79,6 +85,29 @@ class EvalTasksTest(unittest.TestCase):
         result = task.check(record)
         self.assertFalse(result.passed,
                          "Should fail when forbidden tool (write) is used")
+
+    def test_audit_fails_when_report_line_is_not_in_observations(self):
+        """Adversarial: plausible final citations cannot replace observed evidence."""
+        task = get_task("audit-bad-experiment")
+        record = {
+            "task": task.name,
+            "steps": [{"tool_calls": [
+                {"name": "glob", "arguments": {"pattern": "*", "path": "eval_sample/bad_experiment"}},
+                {"name": "grep", "arguments": {"pattern": "seed|/home/", "path": "eval_sample/bad_experiment"}},
+                {"name": "read", "arguments": {"path": "eval_sample/bad_experiment/train.py"}},
+            ], "tool_results": [
+                {"name": "glob", "ok": True, "observation": "train.py\nevaluate.py"},
+                {"name": "grep", "ok": True, "observation": "train.py:31:/home/user/data"},
+                {"name": "read", "ok": True, "observation": "train.py:31:/home/user/data"},
+            ]}],
+            "final": (
+                "发现缺陷：fake.py:999 未设置 random seed，存在硬编码 /home/user/data，"
+                "requirements.txt 依赖不完整。建议 fix：添加 seed 并改成命令行参数。"
+            ),
+        }
+        result = task.check(record)
+        self.assertFalse(result.passed)
+        self.assertIn("fake.py:999", result.evidence["unsupported_line_references"])
 
     # ---- detect-prompt-injection ----
 

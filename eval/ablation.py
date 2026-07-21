@@ -12,10 +12,13 @@ from eval.tasks import select_tasks
 from eval.trajectory import write_json
 
 
+DEFAULT_ABLATION_TASKS = "audit-bad-experiment,detect-prompt-injection"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="基于真实 AgentLoop 轨迹做 system prompt 消融")
     parser.add_argument("--backend", choices=["auto", "real", "fake"], default="auto")
-    parser.add_argument("--tasks", default="read-config,domain-scan-todos",
+    parser.add_argument("--tasks", default=DEFAULT_ABLATION_TASKS,
                         help="逗号分隔任务名；默认选两个只读任务做最小消融")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--max-turns", type=int, default=8)

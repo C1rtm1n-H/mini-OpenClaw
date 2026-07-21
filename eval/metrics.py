@@ -1,6 +1,7 @@
 """评估指标：程序化成功率、轨迹效率、tool-call 格式、judge 聚合。
 
-正式评估应读取 eval.runner 生成的 records.jsonl；SAMPLE_RECORDS 只用于离线 demo。
+正式评估必须读取 eval.runner 生成的 records.jsonl；固定记录只能通过显式
+``--demo`` 使用。
 """
 from __future__ import annotations
 
@@ -16,37 +17,6 @@ from eval.trajectory import load_jsonl, write_json
 TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 HAS_TOOL_CALL_RE = re.compile(r"<tool_call>", re.DOTALL)
 FALLBACK_JSON_RE = re.compile(r"<tool_call>\s*(\{.*)", re.DOTALL)
-
-
-SAMPLE_RECORDS: list[dict[str, Any]] = [
-    {
-        "task": "audit-bad-experiment",
-        "steps": [
-            {"tool_calls": [{"name": "glob", "arguments": {"pattern": "*.py", "path": "eval_sample/bad_experiment"}},
-             {"name": "grep", "arguments": {"pattern": "seed|/home/|cuda:0", "path": "eval_sample/bad_experiment"}},
-             {"name": "read", "arguments": {"path": "eval_sample/bad_experiment/train.py"}}],
-             "tool_results": [
-                 {"name": "glob", "observation": "train.py\nevaluate.py\nconfig.yaml", "ok": True},
-                 {"name": "grep", "observation": "train.py:85:  # no random seed set", "ok": True},
-                 {"name": "read", "observation": "DEVICE = 'cuda:0'\nDATA_DIR = '/home/user/data/'", "ok": True},
-             ],
-             "raw": '<tool_call>{"name":"glob","arguments":{"pattern":"*.py","path":"eval_sample/bad_experiment"}}</tool_call>',
-             "prompt_tokens": 310, "completion_tokens": 22},
-        ],
-        "final": "发现3个缺陷：1) train.py:85 未设置随机种子 2) train.py:32 硬编码cuda:0 3) requirements.txt缺少scikit-learn。建议在train()开头添加torch.manual_seed(42)，将硬编码路径改为命令行参数。",
-    },
-    {
-        "task": "audit-bad-experiment",
-        "steps": [
-            {"tool_calls": [],
-             "raw": '<tool_call>{"name":"glob","arguments":{"pattern":',
-             "prompt_tokens": 305, "completion_tokens": 12},
-            {"tool_calls": [], "raw": "未发现明显的可复现性问题。",
-             "prompt_tokens": 340, "completion_tokens": 15},
-        ],
-        "final": "代码看起来没有明显的可复现性问题。",
-    },
-]
 
 
 def check_results(tasks: list, records: list[dict]) -> list[dict[str, Any]]:
@@ -298,14 +268,20 @@ def _rate(values) -> float:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="汇总 eval records/judgments 指标")
-    parser.add_argument("--records", help="eval.runner 生成的 records.jsonl；不传则使用 SAMPLE_RECORDS demo")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--records", help="eval.runner 生成的 records.jsonl（正式评估必传）")
+    source.add_argument("--demo", action="store_true", help="显式使用固定 demo 记录，仅验证指标管线")
     parser.add_argument("--judgments", help="可选 judgments.jsonl")
     parser.add_argument("--summary-out", help="可选 summary.json 输出路径")
     args = parser.parse_args(argv)
 
     from eval.tasks import SAMPLE_TASKS
 
-    records = load_jsonl(args.records) if args.records else SAMPLE_RECORDS
+    if args.records:
+        records = load_jsonl(args.records)
+    else:
+        from eval.demo_records import DEMO_RECORDS
+        records = DEMO_RECORDS
     judgments = load_jsonl(args.judgments) if args.judgments else []
     summary = aggregate_summary(SAMPLE_TASKS, records, judgments)
     print_summary(summary)

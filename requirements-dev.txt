@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# 测试与验收
+pytest>=8.0

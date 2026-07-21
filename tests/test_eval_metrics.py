@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 
 from eval.metrics import (
     aggregate_summary,
@@ -8,11 +10,21 @@ from eval.metrics import (
     json_valid_rate,
     success_rate,
     tool_success_rate,
+    main,
 )
 from eval.tasks import SAMPLE_TASKS, get_task
 
 
 class EvalMetricsTest(unittest.TestCase):
+    def test_cli_requires_real_records_or_explicit_demo(self):
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised:
+            main([])
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_cli_demo_must_be_explicit(self):
+        with redirect_stdout(StringIO()):
+            self.assertEqual(main(["--demo"]), 0)
+
     def test_structured_tool_parse_failure_counts_against_json_rate(self):
         records = [{
             "task": "list-dir",
@@ -46,7 +58,7 @@ class EvalMetricsTest(unittest.TestCase):
                 {"name": "read", "arguments": {"path": "eval_sample/bad_experiment/train.py"}},
             ], "tool_results": [
                 {"name": "glob", "observation": "train.py\nevaluate.py"},
-                {"name": "grep", "observation": "train.py:85:random.seed"},
+                {"name": "grep", "observation": "train.py:31:/home/user/data\ntrain.py:85:random.seed"},
                 {"name": "read", "observation": "DEVICE = 'cuda:0'"},
             ]}],
             "final": "train.py:85 缺少随机种子 seed，建议添加 torch.manual_seed。train.py:31 硬编码路径 /home/user/data/，应改为命令行参数。",
